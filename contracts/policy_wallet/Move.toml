@@ -1,0 +1,17 @@
+# Mythos Policy Wallet - Sui control layer for the Ika-signed multichain wallet.
+#
+# Network selection: the vendored Ika packages under ../vendor/<network>/ pin the
+# published package addresses for testnet and mainnet. Default build targets
+# TESTNET. To build for mainnet, switch the two `local = ...` paths below to
+# ../vendor/mainnet/... (addresses are resolved from each package's Move.lock).
+[package]
+name = "policy_wallet"
+edition = "2024.beta"
+license = "BSD-3-Clause-Clear"
+
+[dependencies]
+ika = { local = "../vendor/testnet/ika" }
+ika_dwallet_2pc_mpc = { local = "../vendor/testnet/ika_dwallet_2pc_mpc" }
+
+[addresses]
+policy_wallet = "0x0"

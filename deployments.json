@@ -1,0 +1,11 @@
+{
+  "testnet": {
+    "policyPackageId": "0x7ff6377aca6185c4abe903fd88d90f0a540001b55698c6d513d8e093ea774fc2",
+    "registryId": "0xd04d558c2ea37f4fda11e184df83d035634f8c9c42d47860c154f166eab24eff",
+    "upgradeCapId": "0xfe24143f475bf1772d1b1ce54de9650bfecbd2653c6d6bac89c3b50d3489e0d6",
+    "publishedAt": "2026-06-11T00:00:00.000Z",
+    "publishDigest": "8Q2MWR6HQjFs9J2Zky9Zuvw2ci3wg7pSEUBFFN5q5LE2",
+    "latestPackageId": "0x219454394805e15f3ca2a31411fd4ccf3d648c1854f8a964a53b8f49d25570a7",
+    "lastUpgradeDigest": "476jB4F1nejrD9ZWrx64KF3nJjF2SPSZS6n3g74CnUdn"
+  }
+}

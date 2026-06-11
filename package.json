@@ -1,0 +1,28 @@
+{
+  "name": "mythos-multichain-policy-wallet",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:move": "cd contracts/policy_wallet && sui move test",
+    "build:move": "cd contracts/policy_wallet && sui move build",
+    "publish:testnet": "tsx scripts/publish.ts testnet",
+    "publish:mainnet": "tsx scripts/publish.ts mainnet",
+    "e2e:testnet": "tsx scripts/e2e-testnet.ts",
+    "recover": "tsx scripts/recover.ts",
+    "dev": "pnpm --filter @mythos/web dev"
+  },
+  "dependencies": {
+    "@ika.xyz/sdk": "^0.4.0",
+    "@mysten/sui": "^2.16.0",
+    "@mythos/wallet-core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

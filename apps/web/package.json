@@ -1,0 +1,28 @@
+{
+  "name": "@mythos/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ika.xyz/sdk": "^0.4.0",
+    "@mysten/dapp-kit-react": "^2.0.1",
+    "@mysten/sui": "^2.16.0",
+    "@mythos/wallet-core": "workspace:*",
+    "ethers": "^6.16.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "typescript": "^5.8.3",
+    "vite": "^7.3.0",
+    "vite-plugin-node-polyfills": "^0.24.0"
+  }
+}
