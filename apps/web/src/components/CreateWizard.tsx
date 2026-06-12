@@ -155,21 +155,28 @@ export function CreateWizard({
       if (!walletId) throw new Error('new wallet not found in registry');
       log(`Wallet: ${walletId}`);
 
-      // optional second dWallet for Solana
+      // optional second dWallet for Solana - failure here must NOT abort
+      // the whole wallet creation; we just continue without Solana.
+      let solanaEnabled = false;
       if (needsEd25519) {
-        log('Solana enabled: creating ed25519 dWallet (network support permitting)...');
-        const { buildAddDwalletTx } = await import('@mythos/wallet-core');
-        const dkg2 = await core.ika.prepareSharedDkg(Curve.ED25519, account.address);
-        const tx2 = buildAddDwalletTx(core.ids, walletId, {
-          curve: IkaCurve.Ed25519,
-          centralizedPublicKeyShareAndProof: dkg2.centralizedPublicKeyShareAndProof,
-          userPublicOutput: dkg2.userPublicOutput,
-          publicUserSecretKeyShare: dkg2.publicUserSecretKeyShare,
-          sessionIdentifier: dkg2.sessionIdentifier,
-        });
-        // top up the wallet first - add_dwallet pays from wallet balances
-        await exec(buildDepositBalancesTx(core.ids, walletId, 1_500_000_000n, 500_000_000n), 'fund');
-        await exec(tx2, 'add ed25519 dwallet');
+        try {
+          log('Solana enabled: creating ed25519 dWallet (network support permitting)...');
+          const { buildAddDwalletTx } = await import('@mythos/wallet-core');
+          const dkg2 = await core.ika.prepareSharedDkg(Curve.ED25519, account.address);
+          const tx2 = buildAddDwalletTx(core.ids, walletId, {
+            curve: IkaCurve.Ed25519,
+            centralizedPublicKeyShareAndProof: dkg2.centralizedPublicKeyShareAndProof,
+            userPublicOutput: dkg2.userPublicOutput,
+            publicUserSecretKeyShare: dkg2.publicUserSecretKeyShare,
+            sessionIdentifier: dkg2.sessionIdentifier,
+          });
+          // top up the wallet first - add_dwallet pays from wallet balances
+          await exec(buildDepositBalancesTx(core.ids, walletId, 1_500_000_000n, 500_000_000n), 'fund');
+          await exec(tx2, 'add ed25519 dwallet');
+          solanaEnabled = true;
+        } catch (solErr) {
+          log(`WARNING: Solana dWallet failed (${(solErr as Error).message}). Continuing without Solana; it can be added later from the dashboard once supported.`);
+        }
       }
 
       // c. wait for activation + derive addresses
@@ -183,7 +190,7 @@ export function CreateWizard({
       log(`BTC address: ${btcAddr}`);
 
       let solPubkey: Uint8Array | null = null;
-      if (needsEd25519) {
+      if (solanaEnabled) {
         const s2 = await getWalletState(core.sui as never, walletId);
         const edId = s2.dwallets.get(IkaCurve.Ed25519);
         if (edId) {
@@ -197,7 +204,10 @@ export function CreateWizard({
       // d. configure chains + address book + finalize (single PTB)
       log('Configuring chain policies + recording the on-chain address book...');
       let setupTx;
-      for (const chain of enabledChains) {
+      const configurableChains = enabledChains.filter(
+        (c) => c.kind !== ChainKind.Solana || solanaEnabled,
+      );
+      for (const chain of configurableChains) {
         const d = chainDrafts[chain.chainKey];
         const dec = chain.decimals;
         const params = {

@@ -132,7 +132,12 @@ export class IkaService {
     const sessionIdentifier = createRandomSessionIdentifier();
     const seed = crypto.getRandomValues(new Uint8Array(32));
     const ephemeralKeys = await UserShareEncryptionKeys.fromRootSeedKey(seed, curve);
-    const protocolPublicParameters = await this.ikaClient.getProtocolPublicParameters();
+    // Protocol parameters are CURVE-SPECIFIC; omitting the curve silently
+    // returns secp256k1 parameters and breaks ed25519 DKG preparation.
+    const protocolPublicParameters = await this.ikaClient.getProtocolPublicParameters(
+      undefined,
+      curve,
+    );
     const result = await prepareDKG(
       protocolPublicParameters,
       curve,
@@ -208,7 +213,10 @@ export class IkaService {
     curve: Curve;
   }): Promise<Uint8Array> {
     await this.init();
-    const protocolPublicParameters = await this.ikaClient.getProtocolPublicParameters();
+    const protocolPublicParameters = await this.ikaClient.getProtocolPublicParameters(
+      undefined,
+      params.curve,
+    );
     const signature = await createUserSignMessageWithPublicOutput(
       protocolPublicParameters,
       params.dwallet.publicOutput,
