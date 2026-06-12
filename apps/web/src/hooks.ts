@@ -18,7 +18,8 @@ import {
   buildCreateSpendRequestTx,
   buildEvmTransfer,
   buildErc20Transfer,
-  buildSolTransfer,
+  buildSolDurableTransfer,
+  createDurableNonceAccount,
   addressToScript,
   checkBtcIntent,
   checkEvmIntent,
@@ -27,7 +28,6 @@ import {
   evmAddressBytes,
   fetchEvmTxParams,
   fetchFeeRate,
-  fetchRecentBlockhash,
   fetchUtxos,
   getWalletState,
   p2wpkhScript,
@@ -275,13 +275,17 @@ export function useCreateSpend(core: CoreCtx) {
           if (!check.ok) throw new Error(`intent check failed: ${check.errors.join('; ')}`);
           messages = [plan.message];
         } else if (chain.kind === ChainKind.Solana) {
-          const blockhash = await fetchRecentBlockhash(cfg.solanaRpcUrl);
+          // Durable nonce: a recent blockhash expires in ~60-90s, far less
+          // than multisig voting takes. The nonce account's authority is the
+          // wallet itself, so only the policy-gated signature can use it.
+          setStatus('creating durable nonce account (devnet airdrop)...');
+          const nonce = await createDurableNonceAccount(cfg.solanaRpcUrl, dwallet.publicKey);
           destinationBytes = solanaAddressBytes(draft.destination);
-          const plan = buildSolTransfer({
+          const plan = buildSolDurableTransfer({
             fromPubkey: dwallet.publicKey,
             to: draft.destination,
             lamports: draft.amountBaseUnits,
-            recentBlockhash: blockhash,
+            nonce,
           });
           const check = checkSolIntent({
             message: plan.message,
