@@ -160,3 +160,8 @@ export async function broadcastEvm(rpcUrl: string, signedTxHex: string): Promise
   const response = await provider.broadcastTransaction(signedTxHex);
   return response.hash;
 }
+
+export async function fetchEvmNativeBalance(rpcUrl: string, address: string): Promise<bigint> {
+  const provider = evmProvider(rpcUrl);
+  return provider.getBalance(address);
+}

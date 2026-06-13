@@ -235,6 +235,11 @@ export async function broadcastSol(rpcUrl: string, signedTx: Uint8Array): Promis
   });
 }
 
+export async function fetchSolBalance(rpcUrl: string, address: string): Promise<bigint> {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  return BigInt(await connection.getBalance(new PublicKey(address), 'confirmed'));
+}
+
 export function solSignatureBase58(signature64: Uint8Array): string {
   return base58.encode(signature64);
 }

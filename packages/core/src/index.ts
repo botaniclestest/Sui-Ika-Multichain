@@ -6,4 +6,5 @@ export * from './ika/service.js';
 export * from './policy/client.js';
 export * from './policy/state.js';
 export * from './recovery/discovery.js';
+export * from './recovery/balances.js';
 export * from './verify/intent.js';

@@ -380,6 +380,20 @@ export async function fetchUtxos(esploraUrl: string, address: string): Promise<U
   }));
 }
 
+export async function fetchBtcBalance(
+  esploraUrl: string,
+  address: string,
+): Promise<{ confirmed: bigint; unconfirmed: bigint; total: bigint }> {
+  const utxos = await fetchUtxos(esploraUrl, address);
+  let confirmed = 0n;
+  let unconfirmed = 0n;
+  for (const utxo of utxos) {
+    if (utxo.confirmed) confirmed += utxo.value;
+    else unconfirmed += utxo.value;
+  }
+  return { confirmed, unconfirmed, total: confirmed + unconfirmed };
+}
+
 export async function fetchFeeRate(esploraUrl: string): Promise<bigint> {
   try {
     const res = await fetch(`${esploraUrl}/fee-estimates`);

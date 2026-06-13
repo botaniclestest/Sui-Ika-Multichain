@@ -15,6 +15,7 @@ import {
   type RecoveredWallet,
   type SuiNetwork,
   type DurableNonce,
+  type ChainBalanceRow,
   buildBtcSpend,
   buildCreateSpendRequestTx,
   buildEvmTransfer,
@@ -29,6 +30,7 @@ import {
   evmAddressBytes,
   fetchEvmTxParams,
   fetchFeeRate,
+  fetchRecoveredBalances,
   fetchUtxos,
   getWalletState,
   p2wpkhScript,
@@ -162,6 +164,42 @@ export function useRecoveredWallet(core: CoreCtx, walletId: string | null) {
   }, [refresh]);
 
   return { data, error, loading, refresh };
+}
+
+export function useRecoveredBalances(core: CoreCtx, recovered: RecoveredWallet | null) {
+  const [balances, setBalances] = useState<ChainBalanceRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+
+  const refresh = useCallback(async () => {
+    const gen = ++generation.current;
+    if (!recovered) {
+      setBalances(null);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const rows = await fetchRecoveredBalances({
+        suiClient: core.sui as never,
+        recovered,
+        config: resolveConfig(core.network),
+      });
+      if (gen === generation.current) setBalances(rows);
+    } catch (e) {
+      if (gen === generation.current) setError((e as Error).message);
+    } finally {
+      if (gen === generation.current) setLoading(false);
+    }
+  }, [core.network, core.sui, recovered]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { balances, loading, error, refresh };
 }
 
 export interface SpendDraft {

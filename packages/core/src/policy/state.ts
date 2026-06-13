@@ -250,3 +250,57 @@ export async function listProposals(
 }
 
 export { toBytes };
+
+export interface SuiVaultBalance {
+  coinType: string;
+  amount: bigint;
+}
+
+export async function getVaultBalances(
+  client: SuiClient,
+  walletId: string,
+): Promise<SuiVaultBalance[]> {
+  const obj = await client.getObject({ id: walletId, options: { showContent: true } });
+  if (!obj.data) throw new Error(`wallet ${walletId} not found`);
+  const f = fields(obj.data.content);
+  const vaultId = tableId(f.vault);
+  const out: SuiVaultBalance[] = [];
+  for await (const entry of iterateDynamicFields(client, vaultId)) {
+    out.push({
+      coinType: normalizeSuiTypeName(dynamicFieldNameToString((entry.name as Json).value)),
+      amount: dynamicFieldBalanceValue(entry.value),
+    });
+  }
+  return out.sort((a, b) => a.coinType.localeCompare(b.coinType));
+}
+
+function dynamicFieldNameToString(name: unknown): string {
+  if (typeof name === 'string') {
+    if (name.includes('::')) return name;
+    try {
+      return fromUtf8(base64ToBytes(name));
+    } catch {
+      return name;
+    }
+  }
+  if (Array.isArray(name)) return fromUtf8(Uint8Array.from(name as number[]));
+  const f = (name as Json | undefined)?.fields as Json | undefined;
+  const nested = (f?.name ?? f?.value) as unknown;
+  if (nested !== undefined) return dynamicFieldNameToString(nested);
+  throw new Error('unsupported vault coin type key');
+}
+
+function dynamicFieldBalanceValue(value: unknown): bigint {
+  if (typeof value === 'string' || typeof value === 'number') return asBig(value);
+  const f = (value as Json | undefined)?.fields as Json | undefined;
+  const nested = f?.value ?? (value as Json | undefined)?.value;
+  if (nested === undefined) throw new Error('unsupported vault balance value');
+  return dynamicFieldBalanceValue(nested);
+}
+
+function normalizeSuiTypeName(typeName: string): string {
+  return typeName.replace(/^(0x)?([0-9a-fA-F]{64})(::)/, (_match, _prefix, addr, sep) => {
+    const short = BigInt(`0x${addr}`).toString(16);
+    return `0x${short}${sep}`;
+  });
+}

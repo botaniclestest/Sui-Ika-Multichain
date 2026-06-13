@@ -11,6 +11,7 @@ import {
   ProposalAction,
   RequestStatus,
   type AdminProposalState,
+  type ChainBalanceRow,
   type RecoveredWallet,
   type SpendRequestState,
   assembleBtcTransaction,
@@ -46,7 +47,9 @@ import {
   buildExecuteProposalTx,
 } from '@mythos/wallet-core';
 import { BTC_NETWORK_FOR } from '../config';
-import { useCreateSpend, useExec, useRecoveredWallet, type CoreCtx } from '../hooks';
+import { useCreateSpend, useExec, useRecoveredBalances, useRecoveredWallet, type CoreCtx } from '../hooks';
+
+type BalanceState = ReturnType<typeof useRecoveredBalances>;
 
 function fmtUnits(v: bigint, decimals: number): string {
   const neg = v < 0n;
@@ -71,6 +74,26 @@ const STATUS_LABEL: Record<number, string> = {
   [RequestStatus.Expired]: 'expired',
 };
 
+function presignPoolLabel(key: string): string {
+  const [curve, alg] = key.split(':').map((v) => Number(v));
+  if (curve === 0 && alg === 0) return 'BTC/EVM secp256k1';
+  if (curve === 0 && alg === 1) return 'BTC taproot';
+  if (curve === 2 && alg === 0) return 'Solana ed25519';
+  return `curve ${curve}, alg ${alg}`;
+}
+
+function fmtBalance(row: ChainBalanceRow): string {
+  if (row.amount === null) return 'unavailable';
+  if (row.confirmedAmount !== undefined) {
+    const confirmed = `${fmtUnits(row.confirmedAmount, row.decimals)} ${row.symbol} confirmed`;
+    if (row.pendingAmount && row.pendingAmount > 0n) {
+      return `${confirmed} + ${fmtUnits(row.pendingAmount, row.decimals)} pending`;
+    }
+    return confirmed;
+  }
+  return `${fmtUnits(row.amount, row.decimals)} ${row.symbol}`;
+}
+
 export function Dashboard({
   core,
   walletId,
@@ -83,6 +106,7 @@ export function Dashboard({
   const account = useCurrentAccount();
   const exec = useExec();
   const { data, error, loading, refresh } = useRecoveredWallet(core, walletId);
+  const balanceState = useRecoveredBalances(core, data);
   const [tab, setTab] = useState<'overview' | 'send' | 'requests' | 'governance'>('overview');
   const [busyMsg, setBusyMsg] = useState('');
 
@@ -148,7 +172,7 @@ export function Dashboard({
         ))}
       </nav>
 
-      {tab === 'overview' && <Overview core={core} walletId={walletId} data={data} act={act} />}
+      {tab === 'overview' && <Overview core={core} walletId={walletId} data={data} balances={balanceState} act={act} />}
       {tab === 'send' && (
         <SendTab core={core} walletId={walletId} data={data} isSigner={isSigner} onSubmitted={refresh} />
       )}
@@ -168,11 +192,13 @@ function Overview({
   core,
   walletId,
   data,
+  balances,
   act,
 }: {
   core: CoreCtx;
   walletId: string;
   data: RecoveredWallet;
+  balances: BalanceState;
   act: (label: string, fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const exec = useExec();
@@ -208,6 +234,41 @@ function Overview({
         <p className="muted">
           "verified" = the on-chain recorded identity matches what this client independently
           derives from the dWallet public output. Never approve spends on an unverified chain.
+        </p>
+      </div>
+
+      <div className="card">
+        <div className="row spread">
+          <h3>Balances</h3>
+          <button onClick={() => void balances.refresh()} disabled={balances.loading}>
+            {balances.loading ? 'refreshing...' : 'refresh balances'}
+          </button>
+        </div>
+        {balances.error && <div className="error small">{balances.error}</div>}
+        {!balances.balances && !balances.error && <p className="muted">Loading target-chain balances...</p>}
+        {balances.balances && (
+          <table>
+            <thead>
+              <tr>
+                <th>chain</th><th>asset</th><th>balance</th><th>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {balances.balances.map((row) => (
+                <tr key={`${row.chainKey}:${row.assetId}`}>
+                  <td>{row.chainKey}</td>
+                  <td>{row.assetId ? row.symbol : chainDescriptor(row.chainKey)?.symbol ?? row.symbol}</td>
+                  <td>{fmtBalance(row)}</td>
+                  <td className={row.status === 'ok' ? 'ok' : row.status === 'error' ? 'error' : 'muted'}>
+                    {row.status === 'ok' ? row.source : row.error ?? row.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="muted">
+          Target-chain balances are live RPC reads. Fee reserves below are separate Sui-held IKA/SUI used for Ika operations.
         </p>
       </div>
 
@@ -250,7 +311,7 @@ function Overview({
           fee reserves: {fmtUnits(data.state.ikaBalance, 9)} IKA · {fmtUnits(data.state.suiBalance, 9)} SUI
           {'  '}· presigns:{' '}
           {[...data.state.presignPools.entries()]
-            .map(([k, v]) => `${k} -> ${v.length}`)
+            .map(([k, v]) => `${presignPoolLabel(k)}: ${v.length}`)
             .join(', ') || 'none'}
         </p>
         {core.ids && (
