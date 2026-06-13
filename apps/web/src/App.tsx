@@ -21,26 +21,39 @@ export default function App() {
     <div className="shell">
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
-          Mythos <span>Policy Wallet</span>
+          <span className="brand-glyph" aria-hidden="true">M</span>
+          <span className="brand-text">
+            Mythos<span className="accent">Policy Wallet</span>
+          </span>
         </div>
         <div className="header-right">
           <select value={network} onChange={(e) => setNetwork(e.target.value as SuiNetwork)}>
             <option value="testnet">Sui Testnet</option>
             <option value="mainnet">Sui Mainnet</option>
           </select>
-          <ConnectButton />
+          <span className="connect-slot">
+            <ConnectButton />
+          </span>
         </div>
       </header>
 
       {!account && (
         <main className="card center">
+          <div className="landing-chains" aria-hidden="true">
+            <span className="chain-dot" data-chain="btc:mainnet" />
+            <span className="chain-dot" data-chain="eip155:1" />
+            <span className="chain-dot" data-chain="solana:mainnet" />
+            <span className="chain-dot" data-chain="sui:vault" />
+          </div>
           <h1>Policy-controlled multichain wallet</h1>
           <p>
             BTC, EVM, Solana and Sui assets under one Sui-enforced policy, signed by Ika MPC.
             Nothing to back up except your Sui key: every wallet, address, rule and pending
             request is recoverable from chain state alone.
           </p>
-          <ConnectButton />
+          <span className="connect-slot">
+            <ConnectButton />
+          </span>
         </main>
       )}
 

@@ -111,7 +111,15 @@ export function Dashboard({
   const [busyMsg, setBusyMsg] = useState('');
 
   if (error) return <main className="card error">{error}</main>;
-  if (!data) return <main className="card">Recovering wallet state from chain...</main>;
+  if (!data)
+    return (
+      <main className="card">
+        <div className="skeleton h-18 w-60" />
+        <div className="skeleton w-80" />
+        <div className="skeleton w-40" />
+        <p className="muted" style={{ marginTop: 12 }}>Recovering wallet state from chain...</p>
+      </main>
+    );
 
   const isSigner = !!account && data.state.signers.includes(account.address);
 
@@ -442,8 +450,14 @@ function SendTab({
   }
 
   return (
-    <section className="card">
-      <h3>New spend request</h3>
+    <section className="card chain-surface" data-chain={chainKey || undefined}>
+      <div className="chain-header">
+        <h3>New spend request</h3>
+        <span className="chain-chip">
+          <span className="chain-swatch" />
+          {chainDescriptor(chainKey)?.displayName ?? (chainKey || 'select chain')}
+        </span>
+      </div>
       <div className="form">
         <label>
           Chain
@@ -457,7 +471,11 @@ function SendTab({
         </label>
         <label>
           Destination {destinationHint}
-          <input value={destination} onChange={(e) => setDestination(e.target.value.trim())} />
+          <input
+            className="destination-glow"
+            value={destination}
+            onChange={(e) => setDestination(e.target.value.trim())}
+          />
         </label>
         <label>
           Amount ({chainDescriptor(chainKey)?.symbol ?? 'units'})
@@ -669,11 +687,12 @@ function RequestCard({
   })();
 
   return (
-    <div className="card request">
+    <div className="card request" data-chain={req.chainKey}>
       <div className="row spread">
         <strong>
           #{req.id.toString()} {req.chainKey} · {fmtUnits(req.amount, dec)}{' '}
           {chainDescriptor(req.chainKey)?.symbol}
+          <span className="badge chain">{chainDescriptor(req.chainKey)?.displayName ?? req.chainKey}</span>
         </strong>
         <span className={`badge ${req.status === 0 ? '' : 'ok'}`}>{STATUS_LABEL[req.status]}</span>
       </div>
@@ -894,7 +913,7 @@ function ProposalCard({
     : null;
 
   return (
-    <div className="card request">
+    <div className="card request" data-chain={proposal.chainKey || undefined}>
       <div className="row spread">
         <strong>
           proposal #{proposal.id.toString()}: {ACTION_LABEL[proposal.action] ?? proposal.action}

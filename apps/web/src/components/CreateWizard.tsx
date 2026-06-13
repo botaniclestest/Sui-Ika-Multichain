@@ -257,6 +257,19 @@ export function CreateWizard({
         <button onClick={onCancel}>cancel</button>
       </div>
 
+      <div className="step-track" role="list" aria-label="creation steps">
+        {(['Signers & policy', 'Chains & limits', 'Review & create'] as const).map((label, i) => {
+          const n = i + 1;
+          const cls = n === step ? 'step active' : n < step ? 'step done' : 'step';
+          return (
+            <div key={label} className={cls} role="listitem">
+              <span className="num">{n < step ? '✓' : n}</span>
+              <span>{label}</span>
+            </div>
+          );
+        })}
+      </div>
+
       {step === 1 && (
         <section className="card">
           <h3>1. Signers & policy timing</h3>
@@ -400,13 +413,14 @@ function ChainConfigRow({
   onChange: (d: ChainDraft) => void;
 }) {
   return (
-    <div className={`chain-row ${draft.enabled ? 'enabled' : ''}`}>
+    <div className={`chain-row ${draft.enabled ? 'enabled' : ''}`} data-chain={chain.chainKey}>
       <label className="row">
         <input
           type="checkbox"
           checked={draft.enabled}
           onChange={(e) => onChange({ ...draft, enabled: e.target.checked })}
         />
+        <span className="chain-swatch" aria-hidden="true" />
         <strong>{chain.displayName}</strong>
         <span className="muted">{chain.chainKey}</span>
       </label>
