@@ -420,6 +420,25 @@ fun build_sol_transfer(
     m
 }
 
+fun build_sol_transfer_duplicate_own_source(): vector<u8> {
+    let mut m = vector[1u8, 0, 1];
+    m.push_back(4); // [own signer, dest, duplicate own, system]
+    m.append(sol_own());
+    m.append(sol_dest());
+    m.append(sol_own());
+    m.append(repeat(0x00, 32));
+    m.append(repeat(0xEE, 32));
+    m.push_back(1);
+    m.push_back(3); // system program
+    m.push_back(2);
+    m.push_back(2); // duplicate own, but not the signer index
+    m.push_back(1);
+    m.push_back(12);
+    m.append(u32_le(2));
+    m.append(u64_le(1_000_000));
+    m
+}
+
 // === Solana tests ===
 
 #[test]
@@ -432,6 +451,13 @@ fun sol_valid_transfer() {
 #[expected_failure(abort_code = verify_solana::ESourceNotSelf)]
 fun sol_rejects_foreign_source() {
     let msg = build_sol_transfer(repeat(0xDD, 32), sol_dest(), 1_000_000, 0, 2);
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 1_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::ESourceNotSelf)]
+fun sol_rejects_duplicate_non_signer_source() {
+    let msg = build_sol_transfer_duplicate_own_source();
     verify_solana::verify(&msg, &sol_own(), &sol_dest(), 1_000_000);
 }
 
@@ -507,6 +533,34 @@ fun build_sol_durable_transfer(
     m
 }
 
+fun build_sol_durable_duplicate_authority(): vector<u8> {
+    let mut m = vector[1u8, 0, 2];
+    m.push_back(6); // [own signer, dest, duplicate own, nonce, sysvar, system]
+    m.append(sol_own());
+    m.append(sol_dest());
+    m.append(sol_own());
+    m.append(repeat(0xCD, 32));
+    m.append(sysvar_recent_blockhashes());
+    m.append(repeat(0x00, 32));
+    m.append(repeat(0xEE, 32));
+    m.push_back(2);
+    m.push_back(5); // system program
+    m.push_back(3);
+    m.push_back(3); // nonce
+    m.push_back(4); // sysvar
+    m.push_back(2); // duplicate own, but not the signer index
+    m.push_back(4);
+    m.append(u32_le(4));
+    m.push_back(5); // system program
+    m.push_back(2);
+    m.push_back(0); // transfer source is still the signer
+    m.push_back(1);
+    m.push_back(12);
+    m.append(u32_le(2));
+    m.append(u64_le(50_000_000));
+    m
+}
+
 #[test]
 fun sol_valid_durable_nonce_transfer() {
     let msg = build_sol_durable_transfer(sol_own(), sol_dest(), 50_000_000, 0);
@@ -518,6 +572,13 @@ fun sol_valid_durable_nonce_transfer() {
 fun sol_rejects_foreign_nonce_authority() {
     // authority index points at dest, not the wallet
     let msg = build_sol_durable_transfer(sol_own(), sol_dest(), 50_000_000, 1);
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 50_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EBadNonceAdvance)]
+fun sol_rejects_duplicate_non_signer_nonce_authority() {
+    let msg = build_sol_durable_duplicate_authority();
     verify_solana::verify(&msg, &sol_own(), &sol_dest(), 50_000_000);
 }
 

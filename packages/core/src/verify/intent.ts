@@ -213,6 +213,7 @@ export function checkSolIntent(params: {
       const authIdx = message[o++];
       if (!bytesEqual(accounts[sysvarIdx] ?? new Uint8Array(), SYSVAR_RECENT_BLOCKHASHES))
         errors.push('nonce advance sysvar mismatch');
+      if (authIdx !== 0) errors.push('nonce authority is not the wallet signer');
       if (!bytesEqual(accounts[authIdx] ?? new Uint8Array(), ownPubkey))
         errors.push('nonce authority is not the wallet');
       const dataLen = readShortvec(message, o);
@@ -240,6 +241,7 @@ export function checkSolIntent(params: {
     o += 12;
     if (o !== message.length) errors.push('trailing bytes in message');
     if (instruction !== 2) errors.push('not SystemInstruction::Transfer');
+    if (fromIdx !== 0) errors.push('transfer source is not the wallet signer');
     if (!bytesEqual(accounts[fromIdx] ?? new Uint8Array(), ownPubkey))
       errors.push('transfer source is not the wallet');
     if (!bytesEqual(accounts[0] ?? new Uint8Array(), ownPubkey))
@@ -280,4 +282,3 @@ function readShortvec(bytes: Uint8Array, offset: number): { value: number; offse
 export function describeUnverifiedPayload(message: Uint8Array): string {
   return `UNVERIFIED PAYLOAD (${message.length} bytes): ${bytesToHex(message)} - review the raw bytes against an independent decoder before approving.`;
 }
-

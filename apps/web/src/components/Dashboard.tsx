@@ -41,6 +41,7 @@ import {
   p2wpkhScript,
   resolveConfig,
   sigAlgFromNumbers,
+  solanaAddressBytes,
   utf8,
   buildExecuteProposalTx,
 } from '@mythos/wallet-core';
@@ -325,6 +326,16 @@ function SendTab({
 
   const chain = data.state.chains.get(chainKey);
   const dec = chainDescriptor(chainKey)?.decimals ?? 9;
+  const destinationHint =
+    chain?.kind === ChainKind.SuiVault
+      ? '(0x Sui address)'
+      : chain?.kind === ChainKind.Solana
+        ? '(base58 Solana address)'
+        : chain?.kind === ChainKind.Evm
+          ? '(0x EVM address)'
+          : chain?.kind === ChainKind.Btc
+            ? '(Bitcoin address)'
+            : '(chain-native address)';
 
   if (!isSigner) return <section className="card">Connect as a signer to send.</section>;
   if (data.state.paused) return <section className="card error">Wallet is paused.</section>;
@@ -334,6 +345,16 @@ function SendTab({
     try {
       if (!chain || !core.ids) throw new Error('select a chain');
       const amountBase = toBase(amount, dec);
+      if (chain.kind === ChainKind.Solana) {
+        if (destination.startsWith('0x')) {
+          throw new Error('Solana destination must be a base58 Solana address, not a 0x Sui/EVM address.');
+        }
+        try {
+          solanaAddressBytes(destination);
+        } catch {
+          throw new Error('Invalid Solana destination. Enter a base58 Solana public key.');
+        }
+      }
       if (chain.kind === ChainKind.SuiVault) {
         const coinType = '0x2::sui::SUI';
         const tx = buildCreateVaultSpendRequestTx(core.ids, walletId, {
@@ -374,7 +395,7 @@ function SendTab({
           </select>
         </label>
         <label>
-          Destination {chain?.kind === ChainKind.SuiVault ? '(0x Sui address)' : '(chain-native address)'}
+          Destination {destinationHint}
           <input value={destination} onChange={(e) => setDestination(e.target.value.trim())} />
         </label>
         <label>

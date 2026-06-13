@@ -118,10 +118,9 @@ fun verify_nonce_advance(
         _nonce_index < n_accounts && sysvar_index < n_accounts && authority_index < n_accounts,
         EMalformed,
     );
-    assert!(
-        accounts.borrow(sysvar_index) == &SYSVAR_RECENT_BLOCKHASHES,
-        EBadNonceAdvance,
-    );
+    assert!(authority_index == 0, EBadNonceAdvance);
+    let sysvar_recent_blockhashes = SYSVAR_RECENT_BLOCKHASHES;
+    assert!(accounts.borrow(sysvar_index) == &sysvar_recent_blockhashes, EBadNonceAdvance);
     // Only the policy-gated wallet signature may consume the nonce.
     assert!(accounts.borrow(authority_index) == own_pubkey, EBadNonceAdvance);
 
@@ -150,6 +149,7 @@ fun verify_transfer(
     let from_index = r.read_u8() as u64;
     let to_index = r.read_u8() as u64;
     assert!(from_index < n_accounts && to_index < n_accounts, EMalformed);
+    assert!(from_index == 0, ESourceNotSelf);
 
     let data_len = r.read_shortvec_len();
     assert!(data_len == 12, ENotSystemTransfer);
@@ -158,7 +158,7 @@ fun verify_transfer(
     assert!(instruction == 2, ENotSystemTransfer);
     let lamports = r.read_u64_le();
 
-    // The transfer source must be the wallet.
+    // The transfer source must be the wallet signer.
     assert!(accounts.borrow(from_index) == own_pubkey, ESourceNotSelf);
     assert!(accounts.borrow(to_index) == destination, EDestinationMismatch);
     assert!((lamports as u128) == amount, EAmountMismatch);

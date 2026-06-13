@@ -9,12 +9,27 @@ import {
   solanaAddressBytes,
 } from '../src/chains/solana.js';
 import { checkSolIntent } from '../src/verify/intent.js';
-import { hexToBytes } from '../src/codec.js';
+import { concatBytes, hexToBytes } from '../src/codec.js';
 
 const SECRET = hexToBytes('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60');
 const PUB = ed25519.getPublicKey(SECRET);
 const DEST = 'GitYucwpNcg6Dx1Y15UQ9TQn8LZMX1uuqQNn8rXxEWNC';
 const BLOCKHASH = 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N';
+const SYSVAR_RECENT_BLOCKHASHES = hexToBytes(
+  '06a7d517192c568ee08a845f73d29788cf035c3145b21ab344d8062ea9400000',
+);
+
+function u32le(value: number): Uint8Array {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, value, true);
+  return out;
+}
+
+function u64le(value: bigint): Uint8Array {
+  const out = new Uint8Array(8);
+  new DataView(out.buffer).setBigUint64(0, value, true);
+  return out;
+}
 
 describe('solana adapter', () => {
   it('derives the base58 address from the ed25519 pubkey', () => {
@@ -73,6 +88,26 @@ describe('solana adapter', () => {
       amount: 42_000n,
     });
     expect(wrongOwner.ok).toBe(false);
+
+    const duplicateSource = concatBytes(
+      new Uint8Array([1, 0, 1, 4]),
+      PUB,
+      solanaAddressBytes(DEST),
+      PUB,
+      new Uint8Array(32),
+      new Uint8Array(32).fill(0xee),
+      new Uint8Array([1, 3, 2, 2, 1, 12]),
+      u32le(2),
+      u64le(42_000n),
+    );
+    const duplicateSourceCheck = checkSolIntent({
+      message: duplicateSource,
+      ownPubkey: PUB,
+      destination: solanaAddressBytes(DEST),
+      amount: 42_000n,
+    });
+    expect(duplicateSourceCheck.ok).toBe(false);
+    expect(duplicateSourceCheck.errors).toContain('transfer source is not the wallet signer');
   });
 });
 
@@ -133,5 +168,29 @@ describe('solana durable nonce', () => {
       amount: 50_000_000n,
     });
     expect(wrongOwner.ok).toBe(false);
+
+    const duplicateAuthority = concatBytes(
+      new Uint8Array([1, 0, 2, 6]),
+      PUB,
+      solanaAddressBytes(DEST),
+      PUB,
+      new Uint8Array(32).fill(0xcd),
+      SYSVAR_RECENT_BLOCKHASHES,
+      new Uint8Array(32),
+      new Uint8Array(32).fill(0xee),
+      new Uint8Array([2, 5, 3, 3, 4, 2, 4]),
+      u32le(4),
+      new Uint8Array([5, 2, 0, 1, 12]),
+      u32le(2),
+      u64le(50_000_000n),
+    );
+    const duplicateAuthorityCheck = checkSolIntent({
+      message: duplicateAuthority,
+      ownPubkey: PUB,
+      destination: solanaAddressBytes(DEST),
+      amount: 50_000_000n,
+    });
+    expect(duplicateAuthorityCheck.ok).toBe(false);
+    expect(duplicateAuthorityCheck.errors).toContain('nonce authority is not the wallet signer');
   });
 });

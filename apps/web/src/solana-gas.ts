@@ -15,6 +15,7 @@ import { Keypair, PublicKey, Transaction as SolTransaction } from '@solana/web3.
 import { payerFromKeypair, type SolPayer } from '@mythos/wallet-core';
 
 const GAS_TANK_KEY = 'mythos-solana-gas-tank-v1';
+const FAILED_NONCES_KEY = 'mythos-solana-failed-nonces-v1';
 
 interface InjectedSolana {
   isPhantom?: boolean;
@@ -50,6 +51,28 @@ export interface ResolvedPayer {
   payer: SolPayer;
   source: 'browser-wallet' | 'gas-tank';
   address: string;
+}
+
+export interface FailedSolanaNonce {
+  walletId: string;
+  chainKey: string;
+  noncePubkey: string;
+  nonceValue: string;
+  createdAtMs: number;
+}
+
+export function failedSolanaNonces(): FailedSolanaNonce[] {
+  try {
+    return JSON.parse(localStorage.getItem(FAILED_NONCES_KEY) ?? '[]') as FailedSolanaNonce[];
+  } catch {
+    return [];
+  }
+}
+
+export function rememberFailedSolanaNonce(record: FailedSolanaNonce): void {
+  const records = failedSolanaNonces().filter((n) => n.noncePubkey !== record.noncePubkey);
+  records.unshift(record);
+  localStorage.setItem(FAILED_NONCES_KEY, JSON.stringify(records.slice(0, 20)));
 }
 
 /**
