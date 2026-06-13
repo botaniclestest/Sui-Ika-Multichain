@@ -420,6 +420,25 @@ fun build_sol_transfer(
     m
 }
 
+fun build_sol_transfer_duplicate_own_source(): vector<u8> {
+    let mut m = vector[1u8, 0, 1];
+    m.push_back(4); // [own signer, dest, duplicate own, system]
+    m.append(sol_own());
+    m.append(sol_dest());
+    m.append(sol_own());
+    m.append(repeat(0x00, 32));
+    m.append(repeat(0xEE, 32));
+    m.push_back(1);
+    m.push_back(3); // system program
+    m.push_back(2);
+    m.push_back(2); // duplicate own, but not the signer index
+    m.push_back(1);
+    m.push_back(12);
+    m.append(u32_le(2));
+    m.append(u64_le(1_000_000));
+    m
+}
+
 // === Solana tests ===
 
 #[test]
@@ -432,6 +451,13 @@ fun sol_valid_transfer() {
 #[expected_failure(abort_code = verify_solana::ESourceNotSelf)]
 fun sol_rejects_foreign_source() {
     let msg = build_sol_transfer(repeat(0xDD, 32), sol_dest(), 1_000_000, 0, 2);
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 1_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::ESourceNotSelf)]
+fun sol_rejects_duplicate_non_signer_source() {
+    let msg = build_sol_transfer_duplicate_own_source();
     verify_solana::verify(&msg, &sol_own(), &sol_dest(), 1_000_000);
 }
 
@@ -463,4 +489,131 @@ fun sol_rejects_versioned_message() {
     let mut msg = build_sol_transfer(sol_own(), sol_dest(), 1_000_000, 0, 2);
     *msg.borrow_mut(0) = 0x81; // v0 message marker
     verify_solana::verify(&msg, &sol_own(), &sol_dest(), 1_000_000);
+}
+
+// === Solana durable-nonce tests ===
+
+fun sysvar_recent_blockhashes(): vector<u8> {
+    x"06a7d517192c568ee08a845f73d29788cf035c3145b21ab344d8062ea9400000"
+}
+
+/// accounts: [own(signer), dest, nonce, sysvar, system]
+/// ix0: nonceAdvance(nonce=2, sysvar=3, auth=0); ix1: transfer(0 -> 1)
+fun build_sol_durable_transfer(
+    own: vector<u8>,
+    dest: vector<u8>,
+    lamports: u64,
+    auth_index: u8,
+): vector<u8> {
+    let mut m = vector[1u8, 0, 2]; // header: 1 signer, 0 ro-signed, 2 ro-unsigned
+    m.push_back(5); // 5 accounts
+    m.append(own);
+    m.append(dest);
+    m.append(repeat(0xCD, 32)); // nonce account
+    m.append(sysvar_recent_blockhashes());
+    m.append(repeat(0x00, 32)); // system program
+    m.append(repeat(0xEE, 32)); // nonce value in blockhash slot
+    m.push_back(2); // 2 instructions
+    // ix0: advance nonce
+    m.push_back(4); // program index (system)
+    m.push_back(3); // 3 accounts
+    m.push_back(2); // nonce
+    m.push_back(3); // sysvar
+    m.push_back(auth_index); // authority
+    m.push_back(4); // data len
+    m.append(u32_le(4)); // AdvanceNonceAccount
+    // ix1: transfer
+    m.push_back(4); // program index
+    m.push_back(2); // 2 accounts
+    m.push_back(0); // from
+    m.push_back(1); // to
+    m.push_back(12); // data len
+    m.append(u32_le(2));
+    m.append(u64_le(lamports));
+    m
+}
+
+fun build_sol_durable_duplicate_authority(): vector<u8> {
+    let mut m = vector[1u8, 0, 2];
+    m.push_back(6); // [own signer, dest, duplicate own, nonce, sysvar, system]
+    m.append(sol_own());
+    m.append(sol_dest());
+    m.append(sol_own());
+    m.append(repeat(0xCD, 32));
+    m.append(sysvar_recent_blockhashes());
+    m.append(repeat(0x00, 32));
+    m.append(repeat(0xEE, 32));
+    m.push_back(2);
+    m.push_back(5); // system program
+    m.push_back(3);
+    m.push_back(3); // nonce
+    m.push_back(4); // sysvar
+    m.push_back(2); // duplicate own, but not the signer index
+    m.push_back(4);
+    m.append(u32_le(4));
+    m.push_back(5); // system program
+    m.push_back(2);
+    m.push_back(0); // transfer source is still the signer
+    m.push_back(1);
+    m.push_back(12);
+    m.append(u32_le(2));
+    m.append(u64_le(50_000_000));
+    m
+}
+
+#[test]
+fun sol_valid_durable_nonce_transfer() {
+    let msg = build_sol_durable_transfer(sol_own(), sol_dest(), 50_000_000, 0);
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 50_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EBadNonceAdvance)]
+fun sol_rejects_foreign_nonce_authority() {
+    // authority index points at dest, not the wallet
+    let msg = build_sol_durable_transfer(sol_own(), sol_dest(), 50_000_000, 1);
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 50_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EBadNonceAdvance)]
+fun sol_rejects_duplicate_non_signer_nonce_authority() {
+    let msg = build_sol_durable_duplicate_authority();
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 50_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EAmountMismatch)]
+fun sol_durable_rejects_wrong_amount() {
+    let msg = build_sol_durable_transfer(sol_own(), sol_dest(), 50_000_001, 0);
+    verify_solana::verify(&msg, &sol_own(), &sol_dest(), 50_000_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EBadNonceAdvance)]
+fun sol_durable_rejects_fake_sysvar() {
+    let mut m = vector[1u8, 0, 2];
+    m.push_back(5);
+    m.append(sol_own());
+    m.append(sol_dest());
+    m.append(repeat(0xCD, 32));
+    m.append(repeat(0xAB, 32)); // NOT the recent-blockhashes sysvar
+    m.append(repeat(0x00, 32));
+    m.append(repeat(0xEE, 32));
+    m.push_back(2);
+    m.push_back(4);
+    m.push_back(3);
+    m.push_back(2);
+    m.push_back(3);
+    m.push_back(0);
+    m.push_back(4);
+    m.append(u32_le(4));
+    m.push_back(4);
+    m.push_back(2);
+    m.push_back(0);
+    m.push_back(1);
+    m.push_back(12);
+    m.append(u32_le(2));
+    m.append(u64_le(50_000_000));
+    verify_solana::verify(&m, &sol_own(), &sol_dest(), 50_000_000);
 }

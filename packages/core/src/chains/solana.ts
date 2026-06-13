@@ -12,6 +12,8 @@
 
 import {
   Connection,
+  Keypair,
+  NONCE_ACCOUNT_LENGTH,
   PublicKey,
   SystemProgram,
   Transaction as SolTransaction,
@@ -28,6 +30,11 @@ export interface SolSpendPlan {
   assembly: SolAssembly;
 }
 
+export interface DurableNonce {
+  noncePubkey: string;
+  nonceValue: string;
+}
+
 // === derivation ===
 
 export function deriveSolanaAddress(publicKey: Uint8Array): string {
@@ -41,6 +48,12 @@ export function solanaAddressBytes(address: string): Uint8Array {
 
 // === transaction building ===
 
+/**
+ * Plain recent-blockhash transfer. WARNING: expires ~60-90s after creation,
+ * which is far less than any realistic multisig voting window. Use
+ * `buildSolDurableTransfer` for policy-gated spends; this remains only for
+ * single-signer fast-path setups and tests.
+ */
 export function buildSolTransfer(params: {
   fromPubkey: Uint8Array;
   to: string;
@@ -64,6 +77,135 @@ export function buildSolTransfer(params: {
     message,
     assembly: { messageBase64: bytesToBase64(message) },
   };
+}
+
+/**
+ * Durable-nonce transfer: valid until the nonce is consumed, however long
+ * voting takes. The nonce authority must be the wallet itself so only the
+ * policy-gated Ika signature can consume it (the on-chain verifier
+ * enforces this).
+ */
+export function buildSolDurableTransfer(params: {
+  fromPubkey: Uint8Array;
+  to: string;
+  lamports: bigint;
+  nonce: DurableNonce;
+}): SolSpendPlan {
+  const from = new PublicKey(params.fromPubkey);
+  const tx = new SolTransaction({
+    feePayer: from,
+    recentBlockhash: params.nonce.nonceValue,
+  });
+  tx.add(
+    SystemProgram.nonceAdvance({
+      noncePubkey: new PublicKey(params.nonce.noncePubkey),
+      authorizedPubkey: from,
+    }),
+  );
+  tx.add(
+    SystemProgram.transfer({
+      fromPubkey: from,
+      toPubkey: new PublicKey(params.to),
+      lamports: params.lamports,
+    }),
+  );
+  const message = Uint8Array.from(tx.compileMessage().serialize());
+  return {
+    message,
+    assembly: { messageBase64: bytesToBase64(message) },
+  };
+}
+
+/**
+ * Whoever pays the nonce-account rent and signs its creation. Satisfied by:
+ *  - a wallet-adapter provider (Phantom/Solflare `window.solana`),
+ *  - a local Keypair via `payerFromKeypair` (e.g. a dust-only "gas tank").
+ * The payer has NO authority over the nonce afterwards - the nonce
+ * authority is always the policy wallet itself.
+ */
+export interface SolPayer {
+  publicKey: PublicKey;
+  signTransaction(tx: SolTransaction): Promise<SolTransaction>;
+}
+
+export function payerFromKeypair(keypair: Keypair): SolPayer {
+  return {
+    publicKey: keypair.publicKey,
+    async signTransaction(tx: SolTransaction) {
+      tx.partialSign(keypair);
+      return tx;
+    },
+  };
+}
+
+/** Rent + fee the payer needs to create one nonce account, in lamports. */
+export async function nonceCreationCostLamports(rpcUrl: string): Promise<number> {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const rent = await connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH);
+  return rent + 10_000; // + fee margin
+}
+
+/**
+ * Creates and initializes a fresh durable-nonce account whose AUTHORITY is
+ * the wallet's Solana address. Works identically on devnet and mainnet:
+ * the rent (~0.0015 SOL, recoverable by the wallet authority) is paid by
+ * the supplied payer - no faucets involved. One nonce account per spend
+ * request keeps concurrent requests conflict-free.
+ */
+export async function createDurableNonceAccount(
+  rpcUrl: string,
+  authority: Uint8Array,
+  payer: SolPayer,
+): Promise<DurableNonce> {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const nonceAccount = Keypair.generate();
+
+  const rent = await connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH);
+  const balance = await connection.getBalance(payer.publicKey, 'confirmed');
+  const needed = rent + 10_000;
+  if (balance < needed) {
+    throw new Error(
+      `nonce rent payer ${payer.publicKey.toBase58()} holds ${(balance / 1e9).toFixed(6)} SOL ` +
+        `but needs ${(needed / 1e9).toFixed(6)} SOL. Send it SOL from any wallet and retry.`,
+    );
+  }
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const tx = new SolTransaction({
+    feePayer: payer.publicKey,
+    blockhash,
+    lastValidBlockHeight,
+  });
+  tx.add(
+    ...SystemProgram.createNonceAccount({
+      fromPubkey: payer.publicKey,
+      noncePubkey: nonceAccount.publicKey,
+      authorizedPubkey: new PublicKey(authority),
+      lamports: rent,
+    }).instructions,
+  );
+  tx.partialSign(nonceAccount);
+  const signed = await payer.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    'confirmed',
+  );
+
+  const nonceInfo = await connection.getNonce(nonceAccount.publicKey, 'confirmed');
+  if (!nonceInfo) throw new Error('nonce account not found after creation');
+  return {
+    noncePubkey: nonceAccount.publicKey.toBase58(),
+    nonceValue: nonceInfo.nonce,
+  };
+}
+
+/** Current nonce value of an existing nonce account. */
+export async function fetchNonceValue(rpcUrl: string, noncePubkey: string): Promise<string> {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const info = await connection.getNonce(new PublicKey(noncePubkey), 'confirmed');
+  if (!info) throw new Error(`nonce account ${noncePubkey} not found`);
+  return info.nonce;
 }
 
 // === signature assembly ===

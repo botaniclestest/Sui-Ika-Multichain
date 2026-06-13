@@ -165,6 +165,10 @@ export function checkEvmIntent(params: {
 
 // === Solana ===
 
+const SYSVAR_RECENT_BLOCKHASHES = hexToBytes(
+  '06a7d517192c568ee08a845f73d29788cf035c3145b21ab344d8062ea9400000',
+);
+
 export function checkSolIntent(params: {
   message: Uint8Array;
   ownPubkey: Uint8Array;
@@ -173,6 +177,7 @@ export function checkSolIntent(params: {
 }): IntentCheckResult {
   const errors: string[] = [];
   const { message, ownPubkey, destination, amount } = params;
+  let durable = false;
   try {
     let o = 0;
     const numRequired = message[o++];
@@ -186,13 +191,42 @@ export function checkSolIntent(params: {
       accounts.push(message.slice(o, o + 32));
       o += 32;
     }
-    o += 32; // blockhash
+    o += 32; // blockhash / nonce value
     const nInstr = readShortvec(message, o);
     o = nInstr.offset;
-    if (nInstr.value !== 1) errors.push('must contain exactly 1 instruction');
+    if (nInstr.value !== 1 && nInstr.value !== 2)
+      errors.push('must contain 1 (transfer) or 2 (nonce advance + transfer) instructions');
+    durable = nInstr.value === 2;
+
+    const isSystem = (idx: number) =>
+      accounts[idx] !== undefined && accounts[idx].every((b) => b === 0);
+
+    if (durable) {
+      // instruction 0: AdvanceNonceAccount with the wallet as authority
+      const programIdx = message[o++];
+      if (!isSystem(programIdx)) errors.push('nonce advance program is not SystemProgram');
+      const nIx = readShortvec(message, o);
+      o = nIx.offset;
+      if (nIx.value !== 3) errors.push('nonce advance must reference 3 accounts');
+      o++; // nonce account index (any)
+      const sysvarIdx = message[o++];
+      const authIdx = message[o++];
+      if (!bytesEqual(accounts[sysvarIdx] ?? new Uint8Array(), SYSVAR_RECENT_BLOCKHASHES))
+        errors.push('nonce advance sysvar mismatch');
+      if (authIdx !== 0) errors.push('nonce authority is not the wallet signer');
+      if (!bytesEqual(accounts[authIdx] ?? new Uint8Array(), ownPubkey))
+        errors.push('nonce authority is not the wallet');
+      const dataLen = readShortvec(message, o);
+      o = dataLen.offset;
+      if (dataLen.value !== 4) errors.push('nonce advance data malformed');
+      const dv0 = new DataView(message.buffer, message.byteOffset + o);
+      if (dv0.getUint32(0, true) !== 4) errors.push('not AdvanceNonceAccount');
+      o += 4;
+    }
+
+    // transfer instruction
     const programIdx = message[o++];
-    if (!accounts[programIdx] || accounts[programIdx].some((b) => b !== 0))
-      errors.push('program is not SystemProgram');
+    if (!isSystem(programIdx)) errors.push('program is not SystemProgram');
     const nIxAccounts = readShortvec(message, o);
     o = nIxAccounts.offset;
     if (nIxAccounts.value !== 2) errors.push('instruction must reference 2 accounts');
@@ -208,6 +242,8 @@ export function checkSolIntent(params: {
     if (o !== message.length) errors.push('trailing bytes in message');
     if (instruction !== 2) errors.push('not SystemInstruction::Transfer');
     if (fromIdx !== 0) errors.push('transfer source is not the wallet signer');
+    if (!bytesEqual(accounts[fromIdx] ?? new Uint8Array(), ownPubkey))
+      errors.push('transfer source is not the wallet');
     if (!bytesEqual(accounts[0] ?? new Uint8Array(), ownPubkey))
       errors.push('signer is not the wallet');
     if (!bytesEqual(accounts[toIdx] ?? new Uint8Array(), destination))
@@ -219,7 +255,7 @@ export function checkSolIntent(params: {
   return {
     ok: errors.length === 0,
     errors,
-    summary: `Solana: ${amount} lamports -> ${bytesToHex(destination)}`,
+    summary: `Solana${durable ? ' (durable nonce)' : ''}: ${amount} lamports -> ${bytesToHex(destination)}`,
   };
 }
 
@@ -246,4 +282,3 @@ function readShortvec(bytes: Uint8Array, offset: number): { value: number; offse
 export function describeUnverifiedPayload(message: Uint8Array): string {
   return `UNVERIFIED PAYLOAD (${message.length} bytes): ${bytesToHex(message)} - review the raw bytes against an independent decoder before approving.`;
 }
-

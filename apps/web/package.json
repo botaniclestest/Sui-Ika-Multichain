@@ -13,6 +13,7 @@
     "@mysten/dapp-kit-react": "^2.0.1",
     "@mysten/sui": "^2.16.0",
     "@mythos/wallet-core": "workspace:*",
+    "@solana/web3.js": "^1.98.4",
     "ethers": "^6.16.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1"

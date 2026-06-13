@@ -14,11 +14,13 @@ import {
   type PolicyIds,
   type RecoveredWallet,
   type SuiNetwork,
+  type DurableNonce,
   buildBtcSpend,
   buildCreateSpendRequestTx,
   buildEvmTransfer,
   buildErc20Transfer,
-  buildSolTransfer,
+  buildSolDurableTransfer,
+  createDurableNonceAccount,
   addressToScript,
   checkBtcIntent,
   checkEvmIntent,
@@ -27,7 +29,6 @@ import {
   evmAddressBytes,
   fetchEvmTxParams,
   fetchFeeRate,
-  fetchRecentBlockhash,
   fetchUtxos,
   getWalletState,
   p2wpkhScript,
@@ -185,10 +186,12 @@ export function useCreateSpend(core: CoreCtx) {
   const createSpend = useCallback(
     async (walletId: string, recovered: RecoveredWallet, draft: SpendDraft) => {
       if (!core.ids) throw new Error('deployment not configured');
+      let createdSolanaNonce: DurableNonce | null = null;
       setBusy(true);
       try {
         const chain = recovered.state.chains.get(draft.chainKey);
         if (!chain) throw new Error(`chain ${draft.chainKey} not configured`);
+        if (draft.amountBaseUnits <= 0n) throw new Error('amount must be greater than zero');
         const cfg = resolveConfig(core.network);
 
         // Vault spends take the simpler path (handled by caller).
@@ -205,6 +208,27 @@ export function useCreateSpend(core: CoreCtx) {
         let aux: Uint8Array[] = [];
         let destinationBytes: Uint8Array;
         let assetBytes: Uint8Array = new Uint8Array();
+        let preselectedPresigns:
+          | { consumed: { capId: string; presignId: string }[]; presignBytes: Uint8Array[] }
+          | null = null;
+
+        const selectPresigns = async (messageCount: number, loadBytes: boolean) => {
+          const state = await getWalletState(core.sui as never, walletId);
+          const poolKey = `${chain.curve}:${chain.signatureAlgorithm}`;
+          const pool = state.presignPools.get(poolKey) ?? [];
+          if (pool.length < messageCount) {
+            throw new Error(
+              `need ${messageCount} presign(s), pool has ${pool.length}. Add presigns first.`,
+            );
+          }
+          const consumed = pool.slice(-messageCount).reverse();
+          const presignBytes = loadBytes
+            ? await Promise.all(
+                consumed.map((entry) => core.ika.getCompletedPresignBytes(entry.presignId)),
+              )
+            : [];
+          return { consumed, presignBytes };
+        };
 
         if (chain.kind === ChainKind.Btc) {
           const btcNet = BTC_NETWORK_FOR[core.network];
@@ -275,13 +299,28 @@ export function useCreateSpend(core: CoreCtx) {
           if (!check.ok) throw new Error(`intent check failed: ${check.errors.join('; ')}`);
           messages = [plan.message];
         } else if (chain.kind === ChainKind.Solana) {
-          const blockhash = await fetchRecentBlockhash(cfg.solanaRpcUrl);
+          // Durable nonce: a recent blockhash expires in ~60-90s, far less
+          // than multisig voting takes. The nonce account's authority is the
+          // wallet itself, so only the policy-gated signature can use it.
+          // Rent is paid faucet-free by a connected Solana wallet or the
+          // local dust-only gas tank (identical on devnet and mainnet).
           destinationBytes = solanaAddressBytes(draft.destination);
-          const plan = buildSolTransfer({
+          setStatus('checking Solana presign...');
+          preselectedPresigns = await selectPresigns(1, true);
+          const { resolveSolanaPayer } = await import('./solana-gas');
+          const resolved = await resolveSolanaPayer();
+          setStatus(`creating durable nonce account (rent via ${resolved.source}: ${resolved.address.slice(0, 8)}...)`);
+          const nonce = await createDurableNonceAccount(
+            cfg.solanaRpcUrl,
+            dwallet.publicKey,
+            resolved.payer,
+          );
+          createdSolanaNonce = nonce;
+          const plan = buildSolDurableTransfer({
             fromPubkey: dwallet.publicKey,
             to: draft.destination,
             lamports: draft.amountBaseUnits,
-            recentBlockhash: blockhash,
+            nonce,
           });
           const check = checkSolIntent({
             message: plan.message,
@@ -296,16 +335,8 @@ export function useCreateSpend(core: CoreCtx) {
         }
 
         // --- pair with the presigns the contract will pop (LIFO) ---
-        setStatus('pairing presigns...');
-        const state = await getWalletState(core.sui as never, walletId);
-        const poolKey = `${chain.curve}:${chain.signatureAlgorithm}`;
-        const pool = state.presignPools.get(poolKey) ?? [];
-        if (pool.length < messages.length) {
-          throw new Error(
-            `need ${messages.length} presign(s), pool has ${pool.length}. Add presigns first.`,
-          );
-        }
-        const consumed = pool.slice(-messages.length).reverse();
+        if (!preselectedPresigns) setStatus('pairing presigns...');
+        const { consumed, presignBytes } = preselectedPresigns ?? (await selectPresigns(messages.length, false));
         const expectedPresignCapIds = consumed.map((p) => p.capId);
 
         setStatus('computing centralized signatures...');
@@ -314,11 +345,11 @@ export function useCreateSpend(core: CoreCtx) {
         const hash = hashFromNumbers(chain.curve, chain.signatureAlgorithm, chain.hashScheme);
         const centralizedSignatures: Uint8Array[] = [];
         for (let i = 0; i < messages.length; i++) {
-          const presignBytes = await core.ika.getCompletedPresignBytes(consumed[i].presignId);
+          const presign = presignBytes[i] ?? (await core.ika.getCompletedPresignBytes(consumed[i].presignId));
           centralizedSignatures.push(
             await core.ika.computeCentralizedSignature({
               dwallet,
-              presignBytes,
+              presignBytes: presign,
               message: messages[i],
               hash,
               signatureAlgorithm: sigAlg,
@@ -340,7 +371,29 @@ export function useCreateSpend(core: CoreCtx) {
           unverified: false,
         });
         await exec(tx, 'create_spend_request');
+        createdSolanaNonce = null;
         setStatus('request created');
+      } catch (e) {
+        if (createdSolanaNonce) {
+          try {
+            const { rememberFailedSolanaNonce } = await import('./solana-gas');
+            rememberFailedSolanaNonce({
+              walletId,
+              chainKey: draft.chainKey,
+              noncePubkey: createdSolanaNonce.noncePubkey,
+              nonceValue: createdSolanaNonce.nonceValue,
+              createdAtMs: Date.now(),
+            });
+          } catch {
+            /* best-effort local record only */
+          }
+          throw new Error(
+            `${(e as Error).message}\n\n` +
+              `A Solana durable nonce account was already created before this failed: ${createdSolanaNonce.noncePubkey}. ` +
+              `I saved it in this browser as a failed Solana nonce. Its rent is controlled by the policy wallet's Solana authority.`,
+          );
+        }
+        throw e;
       } finally {
         setBusy(false);
       }

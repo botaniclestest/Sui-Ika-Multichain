@@ -14,8 +14,8 @@ your browser profile and your laptop all disappear, any signer recovers
 every address, rule and pending request from public Sui state
 (see [docs/RECOVERY.md](docs/RECOVERY.md)).
 
-> **Honesty first:** the code is complete and tested (36 Move tests,
-> 15 TypeScript tests with byte-exact cross-checks), but it is **not
+> **Honesty first:** the code is complete and tested (42 Move tests,
+> 17 TypeScript tests with byte-exact cross-checks), but it is **not
 > audited** and has not had a mainnet burn-in. Read
 > [docs/SECURITY.md](docs/SECURITY.md) before holding real value.
 
@@ -37,8 +37,8 @@ deployments.json           public deployment constants (commit this)
 pnpm install
 
 # tests
-pnpm --filter @mythos/wallet-core test     # 15 TS tests
-pnpm test:move                             # 36 Move tests
+pnpm --filter @mythos/wallet-core test     # 17 TS tests
+pnpm test:move                             # 42 Move tests
 
 # deploy (sui CLI configured for testnet, gas funded)
 pnpm publish:testnet                       # writes deployments.json

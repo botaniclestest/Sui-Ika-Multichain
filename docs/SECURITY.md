@@ -6,7 +6,7 @@ up, and what can go wrong. Read it before holding meaningful value.
 ## Status: NOT AUDITED
 
 The Move contract, the cryptographic plumbing and the chain adapters have
-unit tests (36 Move tests, 15 TypeScript tests including byte-exact
+unit tests (42 Move tests, 17 TypeScript tests including byte-exact
 cross-checks against independent implementations), but the system has **not
 had a third-party audit and has not yet processed real value at scale**.
 
@@ -27,7 +27,7 @@ happened, treat this as production-quality *code* but not production-proven
 | Exact-bytes binding | The request stores the exact message bytes; `request_future_sign` locks them at creation; `approve_message` is called with those same stored bytes. A request is single-use. |
 | Transaction intent (BTC) | `verify_btc.move` parses every BIP-143 preimage: SIGHASH_ALL only, scriptCode bound to the wallet's own key, hashOutputs/hashPrevouts recomputed from supplied serializations, first output = declared destination+amount, change only back to self, fee ≤ policy cap. |
 | Transaction intent (EVM) | `verify_evm.move` RLP-parses the unsigned EIP-1559 tx: chain id (no cross-chain replay), recipient, value, ERC-20 `transfer` calldata, maxFee×gasLimit ≤ policy cap, empty access list, canonical RLP only. |
-| Transaction intent (Solana) | `verify_solana.move` parses the legacy message: single SystemProgram transfer, wallet is sole signer and source, declared destination and lamports. Versioned messages rejected. |
+| Transaction intent (Solana) | `verify_solana.move` parses the legacy message: either a single SystemProgram transfer or durable-nonce advance + transfer. The wallet must be the sole signer, transfer source and nonce authority; declared destination and lamports must match. Versioned messages rejected. |
 | Per-tx / windowed limits | `per_tx_limit` at creation and execution; rolling `window_limit`/`window_ms` accounting recorded at execution, before signing. |
 | Destination lists | Blocklist always; allowlist when enabled. |
 | Timelocks | Spend timelock between threshold and execution (waived only for fast-path); admin timelock + veto window on every governance action. |
@@ -110,7 +110,7 @@ adding a zero-trust mode later — at the cost of a real secret to back up.
 | **Hash-scheme / cross-chain confusion** | Signing parameters (curve/algorithm/hash) are fixed per chain kind at `configure_chain` time and validated against the chain kind; requests cannot choose their own. Residual risk: a chain with `allow_unverified` shares its (curve,alg,hash) tuple with other chains using the same dWallet — an unverified payload could encode a transaction for a sibling chain, bypassing that sibling's per-chain limits (it still needs full threshold + timelock + the host chain's limits). Keep `allow_unverified` off, or accept that unverified approvals are wallet-wide approvals. |
 | **Presign substitution** | Requests pin the exact presign cap object ids they consume; mismatch aborts. |
 | **Fee-drain griefing** | Signer-only operations spend the wallet's IKA/SUI reserves (DKG/presigns/signing). A rogue signer can waste reserves but not funds. |
-| **Solana durable-nonce/blockhash expiry** | A signed Solana transfer may expire before broadcast (blockhash ~60-90s). The request remains; re-create with a fresh blockhash if it lapses. Funds are never at risk, only convenience. |
+| **Solana durable-nonce lifecycle** | Policy-gated Solana transfers use a per-request durable nonce, so voting delay does not expire the transaction. Nonce rent is paid by a connected Solana wallet or local dust-only gas tank; the nonce authority is always the policy wallet. If request creation fails after nonce creation, the UI reports and locally records the nonce account address. |
 
 ## 4. Known limitations (v1)
 
