@@ -278,8 +278,16 @@ export function useCreateSpend(core: CoreCtx) {
           // Durable nonce: a recent blockhash expires in ~60-90s, far less
           // than multisig voting takes. The nonce account's authority is the
           // wallet itself, so only the policy-gated signature can use it.
-          setStatus('creating durable nonce account (devnet airdrop)...');
-          const nonce = await createDurableNonceAccount(cfg.solanaRpcUrl, dwallet.publicKey);
+          // Rent is paid faucet-free by a connected Solana wallet or the
+          // local dust-only gas tank (identical on devnet and mainnet).
+          const { resolveSolanaPayer } = await import('./solana-gas');
+          const resolved = await resolveSolanaPayer();
+          setStatus(`creating durable nonce account (rent via ${resolved.source}: ${resolved.address.slice(0, 8)}...)`);
+          const nonce = await createDurableNonceAccount(
+            cfg.solanaRpcUrl,
+            dwallet.publicKey,
+            resolved.payer,
+          );
           destinationBytes = solanaAddressBytes(draft.destination);
           const plan = buildSolDurableTransfer({
             fromPubkey: dwallet.publicKey,

@@ -17,7 +17,6 @@ import {
   PublicKey,
   SystemProgram,
   Transaction as SolTransaction,
-  sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import { base58 } from '@scure/base';
 import { base64ToBytes, btcVarint, bytesToBase64, bytesToHex, concatBytes } from '../codec.js';
@@ -118,39 +117,65 @@ export function buildSolDurableTransfer(params: {
 }
 
 /**
+ * Whoever pays the nonce-account rent and signs its creation. Satisfied by:
+ *  - a wallet-adapter provider (Phantom/Solflare `window.solana`),
+ *  - a local Keypair via `payerFromKeypair` (e.g. a dust-only "gas tank").
+ * The payer has NO authority over the nonce afterwards - the nonce
+ * authority is always the policy wallet itself.
+ */
+export interface SolPayer {
+  publicKey: PublicKey;
+  signTransaction(tx: SolTransaction): Promise<SolTransaction>;
+}
+
+export function payerFromKeypair(keypair: Keypair): SolPayer {
+  return {
+    publicKey: keypair.publicKey,
+    async signTransaction(tx: SolTransaction) {
+      tx.partialSign(keypair);
+      return tx;
+    },
+  };
+}
+
+/** Rent + fee the payer needs to create one nonce account, in lamports. */
+export async function nonceCreationCostLamports(rpcUrl: string): Promise<number> {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const rent = await connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH);
+  return rent + 10_000; // + fee margin
+}
+
+/**
  * Creates and initializes a fresh durable-nonce account whose AUTHORITY is
- * the wallet's Solana address. The ephemeral keypair generated here only
- * pays the rent and signs the initialization - it has no power afterwards
- * and is deliberately discarded. One nonce account per spend request keeps
- * concurrent requests conflict-free.
- *
- * On devnet the rent is funded via airdrop; if the faucet is dry the error
- * tells you the ephemeral address to fund manually.
+ * the wallet's Solana address. Works identically on devnet and mainnet:
+ * the rent (~0.0015 SOL, recoverable by the wallet authority) is paid by
+ * the supplied payer - no faucets involved. One nonce account per spend
+ * request keeps concurrent requests conflict-free.
  */
 export async function createDurableNonceAccount(
   rpcUrl: string,
   authority: Uint8Array,
+  payer: SolPayer,
 ): Promise<DurableNonce> {
   const connection = new Connection(rpcUrl, 'confirmed');
-  const payer = Keypair.generate();
   const nonceAccount = Keypair.generate();
 
   const rent = await connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH);
-  const needed = rent + 10_000; // + fee margin
-
-  const isDevnetLike = /devnet|testnet/i.test(rpcUrl);
-  if (isDevnetLike) {
-    const sig = await connection.requestAirdrop(payer.publicKey, Math.max(needed, 100_000_000));
-    const latest = await connection.getLatestBlockhash('confirmed');
-    await connection.confirmTransaction({ signature: sig, ...latest }, 'confirmed');
-  } else {
+  const balance = await connection.getBalance(payer.publicKey, 'confirmed');
+  const needed = rent + 10_000;
+  if (balance < needed) {
     throw new Error(
-      `mainnet durable nonces need rent funding: send ${(needed / 1e9).toFixed(6)} SOL to ` +
-        `${payer.publicKey.toBase58()} and retry, or pre-create a nonce account.`,
+      `nonce rent payer ${payer.publicKey.toBase58()} holds ${(balance / 1e9).toFixed(6)} SOL ` +
+        `but needs ${(needed / 1e9).toFixed(6)} SOL. Send it SOL from any wallet and retry.`,
     );
   }
 
-  const tx = new SolTransaction();
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const tx = new SolTransaction({
+    feePayer: payer.publicKey,
+    blockhash,
+    lastValidBlockHeight,
+  });
   tx.add(
     ...SystemProgram.createNonceAccount({
       fromPubkey: payer.publicKey,
@@ -159,9 +184,13 @@ export async function createDurableNonceAccount(
       lamports: rent,
     }).instructions,
   );
-  await sendAndConfirmTransaction(connection, tx, [payer, nonceAccount], {
-    commitment: 'confirmed',
-  });
+  tx.partialSign(nonceAccount);
+  const signed = await payer.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    'confirmed',
+  );
 
   const nonceInfo = await connection.getNonce(nonceAccount.publicKey, 'confirmed');
   if (!nonceInfo) throw new Error('nonce account not found after creation');
