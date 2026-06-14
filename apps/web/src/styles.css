@@ -713,6 +713,122 @@ tr.disabled { opacity: 0.5; }
 }
 
 /* ============================================================
+   Spinning 3D chain coin
+   ============================================================ */
+
+.send-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 32px;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .send-layout { grid-template-columns: 1fr; }
+  .coin-stage { display: none; }
+}
+
+.coin-stage {
+  display: grid;
+  place-items: center;
+  perspective: 900px;
+  padding: 8px 16px 0 0;
+  perspective-origin: 50% 30%;
+  min-width: 200px;
+}
+
+.coin {
+  position: relative;
+  width: 190px;
+  height: 190px;
+  transform-style: preserve-3d;
+  animation: coin-spin 6.5s linear infinite;
+  will-change: transform;
+  filter: drop-shadow(0 22px 28px color-mix(in srgb, var(--chain-color) 30%, transparent))
+          drop-shadow(0 6px 12px rgba(0, 0, 0, 0.45));
+  transition: filter var(--dur-slow) var(--ease);
+}
+@keyframes coin-spin {
+  from { transform: rotateY(0); }
+  to   { transform: rotateY(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coin { animation-duration: 20s; }
+}
+
+.coin .rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    /* top-left specular highlight */
+    radial-gradient(ellipse 65% 38% at 30% 18%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 60%),
+    /* bottom-right shadow */
+    radial-gradient(ellipse 60% 40% at 75% 85%, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 65%),
+    /* chrome banding */
+    conic-gradient(
+      from 210deg at 50% 50%,
+      #d6dde6 0deg,
+      #f5f7fa 55deg,
+      #a8b1bc 120deg,
+      #7c8595 180deg,
+      #5a6473 240deg,
+      #7c8595 300deg,
+      #d6dde6 360deg
+    );
+  box-shadow:
+    inset 0 5px 8px rgba(255, 255, 255, 0.55),
+    inset 0 -10px 14px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.coin .face {
+  position: absolute;
+  inset: 16px;
+  border-radius: 50%;
+  background:
+    /* top-left face highlight */
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 38%),
+    /* bottom-right face shadow */
+    radial-gradient(circle at 72% 78%, rgba(0, 0, 0, 0.30), rgba(0, 0, 0, 0) 50%),
+    /* chain-tinted body */
+    radial-gradient(circle at 50% 38%, var(--coin-face) 0%, var(--coin-face-dark) 100%);
+  box-shadow:
+    inset 0 4px 10px rgba(255, 255, 255, 0.35),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.40),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.20);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.coin .face::after {
+  /* soft inner rim line, gives the face a subtle bevel */
+  content: '';
+  position: absolute;
+  inset: 4%;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+  pointer-events: none;
+}
+
+.coin .logo {
+  width: 56%;
+  height: 56%;
+  color: rgba(255, 255, 255, 0.95);
+  filter:
+    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
+    drop-shadow(0 -1px 0 rgba(255, 255, 255, 0.18));
+  opacity: 0.95;
+}
+
+.coin .logo-text {
+  font: 700 34px/1 var(--font-sans);
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+
+/* ============================================================
    Per-chain theming (consumed via [data-chain="..."])
    ============================================================ */
 
@@ -721,12 +837,16 @@ tr.disabled { opacity: 0.5; }
   --chain-glow-1: rgba(247, 147, 26, 0.30);
   --chain-glow-2: rgba(255, 184, 77, 0.18);
   --chain-grad: linear-gradient(135deg, #f7931a, #ffb84d);
+  --coin-face: #ffb84d;
+  --coin-face-dark: #b56808;
 }
 [data-chain^='solana:'] {
   --chain-color: #9945ff;
   --chain-glow-1: rgba(153, 69, 255, 0.32);
   --chain-glow-2: rgba(20, 241, 149, 0.24);
   --chain-grad: linear-gradient(135deg, #9945ff, #14f195);
+  --coin-face: #b87aff;
+  --coin-face-dark: #14f195;
 }
 [data-chain='sui:vault'],
 [data-chain^='sui:'] {
@@ -734,32 +854,44 @@ tr.disabled { opacity: 0.5; }
   --chain-glow-1: rgba(76, 163, 255, 0.30);
   --chain-glow-2: rgba(111, 188, 240, 0.18);
   --chain-grad: linear-gradient(135deg, #4ca3ff, #6fbcf0);
+  --coin-face: #8ec6ff;
+  --coin-face-dark: #2a7fd1;
 }
 [data-chain='eip155:1'] {
   --chain-color: #627eea;
   --chain-glow-1: rgba(98, 126, 234, 0.30);
   --chain-glow-2: rgba(88, 166, 255, 0.18);
+  --coin-face: #94afff;
+  --coin-face-dark: #3a5fcf;
 }
 [data-chain='eip155:8453'] {
   --chain-color: #0052ff;
   --chain-glow-1: rgba(0, 82, 255, 0.30);
   --chain-glow-2: rgba(72, 145, 255, 0.18);
+  --coin-face: #5b8cff;
+  --coin-face-dark: #00309e;
 }
 [data-chain='eip155:42161'] {
   --chain-color: #28a0f0;
   --chain-glow-1: rgba(40, 160, 240, 0.30);
   --chain-glow-2: rgba(96, 181, 240, 0.18);
+  --coin-face: #6cc3f7;
+  --coin-face-dark: #0a72b8;
 }
 [data-chain='eip155:10'] {
   --chain-color: #ff0420;
   --chain-glow-1: rgba(255, 4, 32, 0.26);
   --chain-glow-2: rgba(255, 89, 89, 0.16);
+  --coin-face: #ff6373;
+  --coin-face-dark: #b8001c;
 }
 [data-chain^='eip155:'] {
   --chain-color: #627eea;
   --chain-glow-1: rgba(98, 126, 234, 0.30);
   --chain-glow-2: rgba(88, 166, 255, 0.18);
   --chain-grad: linear-gradient(135deg, #627eea, #88a8ff);
+  --coin-face: #94afff;
+  --coin-face-dark: #3a5fcf;
 }
 
 /* ============================================================

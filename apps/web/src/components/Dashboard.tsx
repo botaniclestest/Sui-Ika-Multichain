@@ -458,49 +458,114 @@ function SendTab({
           {chainDescriptor(chainKey)?.displayName ?? (chainKey || 'select chain')}
         </span>
       </div>
-      <div className="form">
-        <label>
-          Chain
-          <select value={chainKey} onChange={(e) => setChainKey(e.target.value)}>
-            {chains.map((c) => (
-              <option key={c.chainKey} value={c.chainKey}>
-                {chainDescriptor(c.chainKey)?.displayName ?? c.chainKey}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Destination {destinationHint}
-          <input
-            className="destination-glow"
-            value={destination}
-            onChange={(e) => setDestination(e.target.value.trim())}
-          />
-        </label>
-        <label>
-          Amount ({chainDescriptor(chainKey)?.symbol ?? 'units'})
-          <input value={amount} onChange={(e) => setAmount(e.target.value.trim())} />
-        </label>
-        {chain?.kind === ChainKind.Evm && (
+      <div className="send-layout">
+        <div className="form">
           <label>
-            ERC-20 token contract (leave empty for native)
-            <input value={token} onChange={(e) => setToken(e.target.value.trim())} placeholder="0x... (optional)" />
+            Chain
+            <select value={chainKey} onChange={(e) => setChainKey(e.target.value)}>
+              {chains.map((c) => (
+                <option key={c.chainKey} value={c.chainKey}>
+                  {chainDescriptor(c.chainKey)?.displayName ?? c.chainKey}
+                </option>
+              ))}
+            </select>
           </label>
-        )}
-        {chain && (
-          <p className="muted">
-            policy: per-tx max {fmtUnits(chain.perTxLimit, dec)} · fast path&nbsp;
-            {fmtUnits(chain.fastPathLimit, dec)} (1 approval, no timelock) · window&nbsp;
-            {fmtUnits(chain.windowLimit - chain.spentInWindow, dec)} remaining
-          </p>
-        )}
-        {status && <div className="progress-line">{status}</div>}
-        {err && <div className="error">{err}</div>}
-        <button className="primary" onClick={() => void submit()} disabled={busy || !destination || !amount}>
-          {busy ? 'preparing...' : 'create spend request'}
-        </button>
+          <label>
+            Destination {destinationHint}
+            <input
+              className="destination-glow"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value.trim())}
+            />
+          </label>
+          <label>
+            Amount ({chainDescriptor(chainKey)?.symbol ?? 'units'})
+            <input value={amount} onChange={(e) => setAmount(e.target.value.trim())} />
+          </label>
+          {chain?.kind === ChainKind.Evm && (
+            <label>
+              ERC-20 token contract (leave empty for native)
+              <input value={token} onChange={(e) => setToken(e.target.value.trim())} placeholder="0x... (optional)" />
+            </label>
+          )}
+          {chain && (
+            <p className="muted">
+              policy: per-tx max {fmtUnits(chain.perTxLimit, dec)} · fast path&nbsp;
+              {fmtUnits(chain.fastPathLimit, dec)} (1 approval, no timelock) · window&nbsp;
+              {fmtUnits(chain.windowLimit - chain.spentInWindow, dec)} remaining
+            </p>
+          )}
+          {status && <div className="progress-line">{status}</div>}
+          {err && <div className="error">{err}</div>}
+          <button className="primary" onClick={() => void submit()} disabled={busy || !destination || !amount}>
+            {busy ? 'preparing...' : 'create spend request'}
+          </button>
+        </div>
+        <div className="coin-stage" aria-hidden="true">
+          <ChainCoin chainKey={chainKey} />
+        </div>
       </div>
     </section>
+  );
+}
+
+function ChainCoin({ chainKey }: { chainKey: string }) {
+  const family = chainKey.startsWith('btc:')
+    ? 'btc'
+    : chainKey.startsWith('solana:')
+      ? 'sol'
+      : chainKey.startsWith('sui:')
+        ? 'sui'
+        : chainKey.startsWith('eip155:')
+          ? 'evm'
+          : 'unknown';
+  return (
+    <div className="coin" data-chain={chainKey || undefined}>
+      <div className="rim" />
+      <div className="face">
+        {family === 'btc' && (
+          <svg className="logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+            <path d="M28 18 H54 a13 13 0 0 1 0 26 H28 Z" />
+            <path d="M28 44 H60 a14 14 0 0 1 0 28 H28 Z" />
+            <g stroke="currentColor" strokeWidth="5" strokeLinecap="round" fill="none">
+              <line x1="40" y1="10" x2="40" y2="82" />
+              <line x1="52" y1="10" x2="52" y2="82" />
+            </g>
+          </svg>
+        )}
+        {family === 'sol' && (
+          <svg className="logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+            <rect x="14" y="28" width="72" height="10" rx="2" />
+            <rect x="14" y="45" width="72" height="10" rx="2" />
+            <rect x="14" y="62" width="72" height="10" rx="2" />
+          </svg>
+        )}
+        {family === 'sui' && (
+          <svg className="logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+            <path d="M50 10 C 30 36, 18 54, 18 70 a 32 32 0 0 0 64 0 C 82 54, 70 36, 50 10 Z" />
+            <path
+              d="M50 32 C 40 48, 34 58, 34 68 a 16 16 0 0 0 32 0 C 66 58, 60 48, 50 32 Z"
+              fill="rgba(255,255,255,0.35)"
+            />
+          </svg>
+        )}
+        {family === 'evm' && (
+          <svg className="logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+            <polygon points="50,8 76,40 50,30 24,40" />
+            <polygon points="24,50 50,40 76,50 50,92" opacity="0.82" />
+            <line
+              x1="50"
+              y1="40"
+              x2="50"
+              y2="92"
+              stroke="rgba(0,0,0,0.18)"
+              strokeWidth="1.2"
+            />
+          </svg>
+        )}
+        {family === 'unknown' && <span className="logo-text">?</span>}
+      </div>
+    </div>
   );
 }
 
