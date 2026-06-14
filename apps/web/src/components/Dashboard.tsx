@@ -517,7 +517,7 @@ function ChainCoin({ chainKey }: { chainKey: string }) {
       : chainKey.startsWith('sui:')
         ? 'sui'
         : chainKey.startsWith('eip155:')
-          ? 'evm'
+          ? 'eth'
           : null;
   if (!family) {
     return (
