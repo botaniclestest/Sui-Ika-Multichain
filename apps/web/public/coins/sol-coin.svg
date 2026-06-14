@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Rotating Solana coin</title>
+  <desc id="desc">A polished dark coin with the Solana gradient symbol, animated in 3D.</desc>
+  <defs>
+    <radialGradient id="face" cx="35%" cy="23%" r="80%"><stop offset="0" stop-color="#62687a"/><stop offset=".2" stop-color="#292e3d"/><stop offset=".58" stop-color="#111522"/><stop offset=".86" stop-color="#080a11"/><stop offset="1" stop-color="#020306"/></radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8fbff"/><stop offset=".16" stop-color="#697485"/><stop offset=".43" stop-color="#070910"/><stop offset=".72" stop-color="#5bffca"/><stop offset=".88" stop-color="#865cff"/><stop offset="1" stop-color="#090b13"/></linearGradient>
+    <linearGradient id="sol" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#00ffa3"/><stop offset=".48" stop-color="#03e1ff"/><stop offset="1" stop-color="#dc1fff"/></linearGradient>
+    <linearGradient id="shine"><stop stop-color="#fff" stop-opacity=".68"/><stop offset=".4" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <filter id="shadow" x="-35%" y="-35%" width="170%" height="180%"><feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#000" flood-opacity=".65"/></filter>
+    <filter id="glow" x="-60%" y="-80%" width="220%" height="260%"><feGaussianBlur stdDeviation="9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <style>
+    .coin{transform-box:fill-box;transform-origin:center;animation:spin 5.6s cubic-bezier(.45,.05,.55,.95) infinite}.glint{animation:glint 5.6s ease-in-out infinite}
+    @keyframes spin{0%{transform:perspective(900px) rotateX(7deg) rotateY(0)}50%{transform:perspective(900px) rotateX(-5deg) rotateY(180deg)}100%{transform:perspective(900px) rotateX(7deg) rotateY(360deg)}}@keyframes glint{0%,100%{opacity:.65;transform:translateX(-12px)}50%{opacity:.1;transform:translateX(25px)}}@media(prefers-reduced-motion:reduce){.coin,.glint{animation:none}}
+  </style>
+  <g class="coin" filter="url(#shadow)">
+    <ellipse cx="256" cy="268" rx="190" ry="190" fill="#020308"/>
+    <circle cx="256" cy="256" r="190" fill="url(#rim)"/>
+    <circle cx="256" cy="256" r="176" fill="#070910"/>
+    <circle cx="256" cy="256" r="165" fill="url(#face)" stroke="#6f788c" stroke-width="3"/>
+    <circle cx="256" cy="256" r="151" fill="none" stroke="#c9ffff" stroke-opacity=".2" stroke-width="2"/>
+    <g fill="url(#sol)" filter="url(#glow)">
+      <path d="M171 160h190c5 0 8 6 5 10l-29 34c-2 2-4 3-7 3H140c-5 0-8-6-5-10l29-34c2-2 4-3 7-3Z"/>
+      <path d="M140 230h190c3 0 5 1 7 3l29 34c3 4 0 10-5 10H171c-3 0-5-1-7-3l-29-34c-3-4 0-10 5-10Z"/>
+      <path d="M171 300h190c5 0 8 6 5 10l-29 34c-2 2-4 3-7 3H140c-5 0-8-6-5-10l29-34c2-2 4-3 7-3Z"/>
+    </g>
+    <ellipse class="glint" cx="207" cy="180" rx="101" ry="69" fill="url(#shine)" transform="rotate(-35 207 180)"/>
+    <path d="M112 323c29 79 121 119 200 83" fill="none" stroke="#a6fff0" stroke-opacity=".24" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

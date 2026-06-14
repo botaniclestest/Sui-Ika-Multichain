@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Rotating Sui coin</title>
+  <desc id="desc">A polished blue metallic coin with the Sui symbol, animated in 3D.</desc>
+  <defs>
+    <radialGradient id="face" cx="34%" cy="24%" r="76%">
+      <stop offset="0" stop-color="#f7fdff"/>
+      <stop offset=".2" stop-color="#bcecff"/>
+      <stop offset=".56" stop-color="#62bff4"/>
+      <stop offset=".82" stop-color="#237dc7"/>
+      <stop offset="1" stop-color="#0b315e"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#e9fbff"/>
+      <stop offset=".2" stop-color="#55b6ed"/>
+      <stop offset=".48" stop-color="#0a3b70"/>
+      <stop offset=".72" stop-color="#98ddff"/>
+      <stop offset="1" stop-color="#082744"/>
+    </linearGradient>
+    <linearGradient id="logo" x1=".15" y1=".1" x2=".8" y2=".95">
+      <stop stop-color="#06233d"/>
+      <stop offset=".52" stop-color="#0b3760"/>
+      <stop offset="1" stop-color="#020d1c"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fff" stop-opacity=".88"/>
+      <stop offset=".36" stop-color="#fff" stop-opacity=".12"/>
+      <stop offset=".68" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-35%" y="-35%" width="170%" height="180%">
+      <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#00152d" flood-opacity=".48"/>
+    </filter>
+    <filter id="inset" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur"/>
+      <feOffset dy="5" result="offset"/>
+      <feComposite in="offset" in2="SourceAlpha" operator="out" result="inner"/>
+      <feFlood flood-color="#001326" flood-opacity=".7" result="color"/>
+      <feComposite in="color" in2="inner" operator="in" result="shade"/>
+      <feComposite in="SourceGraphic" in2="shade" operator="over"/>
+    </filter>
+  </defs>
+  <style>
+    .coin { transform-box: fill-box; transform-origin: center; animation: spin 5.8s cubic-bezier(.45,.05,.55,.95) infinite; }
+    .glint { animation: glint 5.8s ease-in-out infinite; }
+    @keyframes spin { 0%{transform:perspective(900px) rotateX(8deg) rotateY(0deg)} 50%{transform:perspective(900px) rotateX(-5deg) rotateY(180deg)} 100%{transform:perspective(900px) rotateX(8deg) rotateY(360deg)} }
+    @keyframes glint { 0%,100%{opacity:.72;transform:translateX(-10px)} 50%{opacity:.18;transform:translateX(24px)} }
+    @media (prefers-reduced-motion: reduce) { .coin,.glint{animation:none} }
+  </style>
+  <g class="coin" filter="url(#shadow)">
+    <ellipse cx="256" cy="268" rx="190" ry="190" fill="#061c35"/>
+    <circle cx="256" cy="256" r="190" fill="url(#rim)"/>
+    <circle cx="256" cy="256" r="176" fill="#0b4b82"/>
+    <circle cx="256" cy="256" r="165" fill="url(#face)" stroke="#bdeaff" stroke-width="3"/>
+    <circle cx="256" cy="256" r="153" fill="none" stroke="#d9f6ff" stroke-opacity=".55" stroke-width="2"/>
+    <path d="M256 131c-33 48-78 99-78 151 0 51 35 91 78 91s78-40 78-91c0-52-45-103-78-151Zm0 35c18 27 39 54 52 80-42-8-67-29-74-60 7-10 15-21 22-30Zm0 176c-26 0-48-27-48-60 0-21 8-42 21-65 14 31 42 52 89 61v4c0 33-35 60-62 60Z" fill="url(#logo)" filter="url(#inset)"/>
+    <ellipse class="glint" cx="209" cy="183" rx="103" ry="72" fill="url(#shine)" transform="rotate(-35 209 183)"/>
+    <path d="M113 322c29 79 121 119 199 84" fill="none" stroke="#b8ebff" stroke-opacity=".42" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

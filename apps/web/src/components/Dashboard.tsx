@@ -518,113 +518,18 @@ function ChainCoin({ chainKey }: { chainKey: string }) {
         ? 'sui'
         : chainKey.startsWith('eip155:')
           ? 'evm'
-          : 'unknown';
+          : null;
+  if (!family) {
+    return (
+      <div className="coin" aria-hidden="true">
+        <div className="coin-unknown">?</div>
+      </div>
+    );
+  }
   return (
-    <div className="coin" data-chain={chainKey || undefined}>
-      <div className="coin-edge" />
-      <div className="coin-face coin-front">
-        {family === 'btc' && <BtcLogo />}
-        {family === 'sol' && <SolLogo />}
-        {family === 'sui' && <SuiLogo />}
-        {family === 'evm' && <EthLogo />}
-        {family === 'unknown' && <span className="logo-text">?</span>}
-      </div>
-      <div className="coin-face coin-back">
-        {family === 'btc' && <BtcLogo />}
-        {family === 'sol' && <SolLogo />}
-        {family === 'sui' && <SuiLogo />}
-        {family === 'evm' && <EthLogo />}
-        {family === 'unknown' && <span className="logo-text">?</span>}
-      </div>
+    <div className="coin" data-chain={chainKey || undefined} aria-hidden="true">
+      <img className="coin-svg" src={`/coins/${family}-coin.svg`} alt="" />
     </div>
-  );
-}
-
-/* Sui teardrop — smooth drop with a smaller inner drop for the
-   embossed highlight (reads as a polished 3D drop on the coin face). */
-function SuiLogo() {
-  return (
-    <svg className="logo" viewBox="0 0 100 100" aria-hidden="true">
-      <defs>
-        <linearGradient id="sui-coin-grad" x1="50%" y1="0%" x2="50%" y2="100%">
-          <stop offset="0%" stopColor="rgba(255,255,255,1)" />
-          <stop offset="100%" stopColor="rgba(255,255,255,0.55)" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M50 8 C 28 36, 14 56, 14 72 a 36 36 0 0 0 72 0 C 86 56, 72 36, 50 8 Z"
-        fill="url(#sui-coin-grad)"
-      />
-      <path
-        d="M50 30 C 40 46, 32 58, 32 70 a 18 18 0 0 0 36 0 C 68 58, 60 46, 50 30 Z"
-        fill="rgba(255,255,255,0.40)"
-      />
-    </svg>
-  );
-}
-
-/* Solana "S" — three offset horizontal bars with two short vertical
-   connectors that read as the brand S. Not the exact brand mark, but
-   the S shape is unambiguous. */
-function SolLogo() {
-  return (
-    <svg className="logo" viewBox="0 0 100 100" aria-hidden="true">
-      {/* Top bar — extends left */}
-      <rect x="8" y="20" width="58" height="9" rx="2.5" fill="currentColor" />
-      {/* Connector down on the right */}
-      <rect x="60" y="29" width="10" height="20" rx="2" fill="currentColor" />
-      {/* Middle bar */}
-      <rect x="34" y="46" width="58" height="9" rx="2.5" fill="currentColor" />
-      {/* Connector down on the left */}
-      <rect x="30" y="55" width="10" height="20" rx="2" fill="currentColor" />
-      {/* Bottom bar — extends right */}
-      <rect x="34" y="72" width="58" height="9" rx="2.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-/* Bitcoin B — two D-shaped bowls with the two vertical strokes
-   that extend above and below the letter, as per the ₿ mark. */
-function BtcLogo() {
-  return (
-    <svg className="logo" viewBox="0 0 100 100" aria-hidden="true">
-      {/* Vertical strokes that punch through the B top and bottom */}
-      <rect x="40" y="6" width="7" height="88" rx="2" fill="currentColor" />
-      <rect x="55" y="6" width="7" height="88" rx="2" fill="currentColor" />
-      {/* Upper B bowl — D shape opening to the right */}
-      <path
-        d="M22 16 H54 a14 14 0 0 1 0 28 H22 V16 Z"
-        fill="currentColor"
-      />
-      {/* Lower B bowl — slightly wider for the bigger lower curve */}
-      <path
-        d="M22 44 H60 a14 14 0 0 1 0 28 H22 V44 Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-/* Ethereum diamond — two stacked triangles. The upper one is the
-   "roof", the lower one is the "arrow" (taller, more pointed).
-   Center seam line gives the 3D faceted feel. */
-function EthLogo() {
-  return (
-    <svg className="logo" viewBox="0 0 100 100" aria-hidden="true">
-      {/* Upper roof (top half of the diamond) */}
-      <polygon points="50,4 72,38 50,30 28,38" fill="currentColor" />
-      {/* Lower arrow (bottom half) */}
-      <polygon points="28,46 50,36 72,46 50,96" fill="currentColor" opacity="0.85" />
-      {/* Center seam to give a faceted look */}
-      <line
-        x1="50"
-        y1="30"
-        x2="50"
-        y2="96"
-        stroke="rgba(0,0,0,0.18)"
-        strokeWidth="1.2"
-      />
-    </svg>
   );
 }
 
