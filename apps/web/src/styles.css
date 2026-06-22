@@ -152,6 +152,7 @@ header {
   padding: 18px 0;
   margin-bottom: 28px;
   position: relative;
+  z-index: 1000;
 }
 header::after {
   content: '';
@@ -202,7 +203,7 @@ header::after {
   margin-left: 6px;
 }
 
-.header-right { display: flex; gap: 10px; align-items: center; }
+.header-right { display: flex; gap: 10px; align-items: center; position: relative; z-index: 1001; }
 
 h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
 h2 { font-size: 20px; letter-spacing: -0.01em; margin: 0; }
@@ -396,6 +397,7 @@ label.row { flex-direction: row; align-items: center; color: var(--text); }
 .muted { color: var(--muted); font-size: 13px; }
 .small { font-size: 13px; }
 .mono { font-family: var(--font-mono); font-size: 13px; letter-spacing: -0.01em; }
+.break { overflow-wrap: anywhere; word-break: break-word; }
 .ok { color: var(--ok); }
 .error { color: var(--danger); white-space: pre-wrap; }
 
@@ -853,6 +855,47 @@ tr.disabled { opacity: 0.5; }
 .request[data-chain^='sui:'] { border-left-color: #4ca3ff; }
 .request[data-chain^='eip155:'] { border-left-color: #627eea; }
 
+.proposal-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.025);
+}
+.detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.address-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+.address-list {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.025);
+}
+.address-list strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-strong);
+}
+
+@media (max-width: 760px) {
+  .proposal-details,
+  .address-lists { grid-template-columns: 1fr; }
+}
+
 /* ============================================================
    Progress & status
    ============================================================ */
@@ -913,11 +956,18 @@ tr.disabled { opacity: 0.5; }
   display: inline-flex;
   align-items: center;
   border-radius: var(--r-md);
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 6px 18px rgba(124, 92, 255, 0.25);
   transition: box-shadow var(--dur-base) var(--ease), transform var(--dur-base) var(--ease);
 }
 .connect-slot:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(76, 163, 255, 0.35); }
+
+[data-radix-popper-content-wrapper],
+[role='dialog'],
+[role='menu'],
+[data-floating-ui-portal] {
+  z-index: 10000 !important;
+}
 
 /* ============================================================
    Landing decoration

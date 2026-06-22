@@ -5,7 +5,8 @@
 
 import { useMemo, useState } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit-react';
-import { Transaction as EthersTransaction } from 'ethers';
+import { normalizeSuiAddress } from '@mysten/sui/utils';
+import { getAddress, Transaction as EthersTransaction } from 'ethers';
 import {
   ChainKind,
   ProposalAction,
@@ -17,6 +18,7 @@ import {
   assembleBtcTransaction,
   assembleEvmTransaction,
   assembleSolTransaction,
+  addressToScript,
   broadcastBtc,
   broadcastEvm,
   broadcastSol,
@@ -36,8 +38,10 @@ import {
   checkBtcIntent,
   checkEvmIntent,
   checkSolIntent,
+  deriveSolanaAddress,
   curveFromNumber,
   describeUnverifiedPayload,
+  evmAddressBytes,
   hexToBytes,
   p2wpkhScript,
   resolveConfig,
@@ -50,6 +54,17 @@ import { BTC_NETWORK_FOR } from '../config';
 import { useCreateSpend, useExec, useRecoveredBalances, useRecoveredWallet, type CoreCtx } from '../hooks';
 
 type BalanceState = ReturnType<typeof useRecoveredBalances>;
+
+const DASHBOARD_TABS = ['overview', 'send', 'requests', 'governance', 'addressBook'] as const;
+type DashboardTab = (typeof DASHBOARD_TABS)[number];
+
+const TAB_LABEL: Record<DashboardTab, string> = {
+  overview: 'overview',
+  send: 'send',
+  requests: 'requests',
+  governance: 'governance',
+  addressBook: 'address book',
+};
 
 function fmtUnits(v: bigint, decimals: number): string {
   const neg = v < 0n;
@@ -64,6 +79,26 @@ function toBase(human: string, decimals: number): bigint {
   const [whole, frac = ''] = human.trim().split('.');
   const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
   return BigInt(whole || '0') * 10n ** BigInt(decimals) + BigInt(fracPadded || '0');
+}
+
+function hoursToMs(hours: string): bigint {
+  const n = Number.parseFloat(hours.trim());
+  if (!Number.isFinite(n) || n < 0) throw new Error('hours must be a non-negative number');
+  return BigInt(Math.round(n * 3_600_000));
+}
+
+function fmtDuration(ms: bigint): string {
+  const hours = Number(ms) / 3_600_000;
+  if (!Number.isFinite(hours)) return `${ms.toString()}ms`;
+  const rounded = Math.round(hours * 100) / 100;
+  return `${rounded.toString()}h`;
+}
+
+function fmtChainAmount(chainKey: string, amount: bigint): string {
+  const descriptor = chainDescriptor(chainKey);
+  const decimals = descriptor?.decimals ?? 0;
+  const symbol = descriptor?.symbol ?? 'units';
+  return `${fmtUnits(amount, decimals)} ${symbol} (${amount.toString()} base units)`;
 }
 
 const STATUS_LABEL: Record<number, string> = {
@@ -94,6 +129,70 @@ function fmtBalance(row: ChainBalanceRow): string {
   return `${fmtUnits(row.amount, row.decimals)} ${row.symbol}`;
 }
 
+function effectiveSpentInWindow(chain: {
+  spentInWindow: bigint;
+  windowLimit: bigint;
+  windowMs: bigint;
+  windowStartedAtMs: bigint;
+}): bigint {
+  if (chain.windowStartedAtMs > 0n && BigInt(Date.now()) >= chain.windowStartedAtMs + chain.windowMs) {
+    return 0n;
+  }
+  return chain.spentInWindow;
+}
+
+function effectiveWindowRemaining(chain: {
+  spentInWindow: bigint;
+  windowLimit: bigint;
+  windowMs: bigint;
+  windowStartedAtMs: bigint;
+}): bigint {
+  const spent = effectiveSpentInWindow(chain);
+  return chain.windowLimit > spent ? chain.windowLimit - spent : 0n;
+}
+
+function sameSuiAddress(a: string, b: string): boolean {
+  return normalizeSuiAddress(a) === normalizeSuiAddress(b);
+}
+
+function containsSuiAddress(addresses: string[], address: string): boolean {
+  return addresses.some((candidate) => sameSuiAddress(candidate, address));
+}
+
+function displayChainBytes(data: RecoveredWallet, chainKey: string, bytes: Uint8Array): { value: string; raw: string } {
+  const raw = bytesToHex(bytes);
+  if (bytes.length === 0) return { value: '(empty)', raw };
+  const chain = data.state.chains.get(chainKey);
+  if (!chain) return { value: raw, raw };
+
+  if (chain.kind === ChainKind.Evm && bytes.length === 20) {
+    try {
+      return { value: getAddress(bytesToHex(bytes, true)), raw };
+    } catch {
+      return { value: raw, raw };
+    }
+  }
+
+  if (chain.kind === ChainKind.Solana && bytes.length === 32) {
+    try {
+      return { value: deriveSolanaAddress(bytes), raw };
+    } catch {
+      return { value: raw, raw };
+    }
+  }
+
+  if (chain.kind === ChainKind.SuiVault && bytes.length === 32) {
+    return { value: normalizeSuiAddress(bytesToHex(bytes, true)), raw };
+  }
+
+  if (chain.kind === ChainKind.Btc && bytes[0] === 0 && bytes.length === bytes[1] + 2) {
+    const scriptType = bytes[1] === 20 ? 'P2WPKH scriptPubKey' : bytes[1] === 32 ? 'P2WSH scriptPubKey' : 'segwit v0 scriptPubKey';
+    return { value: `${scriptType} ${raw}`, raw };
+  }
+
+  return { value: raw, raw };
+}
+
 export function Dashboard({
   core,
   walletId,
@@ -107,7 +206,7 @@ export function Dashboard({
   const exec = useExec();
   const { data, error, loading, refresh } = useRecoveredWallet(core, walletId);
   const balanceState = useRecoveredBalances(core, data);
-  const [tab, setTab] = useState<'overview' | 'send' | 'requests' | 'governance'>('overview');
+  const [tab, setTab] = useState<DashboardTab>('overview');
   const [busyMsg, setBusyMsg] = useState('');
 
   if (error) return <main className="card error">{error}</main>;
@@ -121,7 +220,7 @@ export function Dashboard({
       </main>
     );
 
-  const isSigner = !!account && data.state.signers.includes(account.address);
+  const isSigner = !!account && containsSuiAddress(data.state.signers, account.address);
 
   async function act(label: string, fn: () => Promise<unknown>) {
     setBusyMsg(label);
@@ -167,9 +266,9 @@ export function Dashboard({
       {busyMsg && <div className="progress-line">{busyMsg}...</div>}
 
       <nav className="tabs">
-        {(['overview', 'send', 'requests', 'governance'] as const).map((t) => (
+        {DASHBOARD_TABS.map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
-            {t}
+            {TAB_LABEL[t]}
             {t === 'requests' && data.pendingRequests.length > 0 && (
               <span className="badge">{data.pendingRequests.length}</span>
             )}
@@ -190,6 +289,7 @@ export function Dashboard({
       {tab === 'governance' && (
         <GovernanceTab core={core} walletId={walletId} data={data} isSigner={isSigner} act={act} />
       )}
+      {tab === 'addressBook' && <AddressBookTab data={data} />}
     </main>
   );
 }
@@ -220,9 +320,9 @@ function Overview({
           ))}
         </ul>
         <p className="muted">
-          spend timelock {Number(data.state.timelockSpendMs) / 3_600_000}h · admin timelock{' '}
-          {Number(data.state.timelockAdminMs) / 3_600_000}h · request expiry{' '}
-          {Number(data.state.requestExpiryMs) / 3_600_000}h
+          spend timelock {fmtDuration(data.state.timelockSpendMs)} · admin timelock{' '}
+          {fmtDuration(data.state.timelockAdminMs)} · request expiry{' '}
+          {fmtDuration(data.state.requestExpiryMs)}
         </p>
       </div>
 
@@ -291,15 +391,19 @@ function Overview({
           <tbody>
             {[...data.state.chains.values()].map((c) => {
               const dec = chainDescriptor(c.chainKey)?.decimals ?? 0;
+              const spent = effectiveSpentInWindow(c);
+              const reset = spent === 0n && c.spentInWindow > 0n;
               return (
                 <tr key={c.chainKey} className={c.enabled ? '' : 'disabled'}>
                   <td>{c.chainKey}</td>
                   <td>{fmtUnits(c.perTxLimit, dec)}</td>
                   <td>{fmtUnits(c.fastPathLimit, dec)}</td>
                   <td>
-                    {fmtUnits(c.windowLimit, dec)} / {Number(c.windowMs) / 3_600_000}h
+                    {fmtUnits(c.windowLimit, dec)} / {fmtDuration(c.windowMs)}
                   </td>
-                  <td>{fmtUnits(c.spentInWindow, dec)}</td>
+                  <td>
+                    {fmtUnits(spent, dec)}{reset && <span className="muted"> (reset)</span>}
+                  </td>
                   <td>{fmtUnits(c.feeLimit, dec)}</td>
                   <td className="muted">
                     {!c.enabled && 'disabled '}
@@ -366,6 +470,123 @@ function Overview({
         )}
       </div>
     </section>
+  );
+}
+
+// === Address Book ===
+
+function AddressBookTab({ data }: { data: RecoveredWallet }) {
+  const chains = [...data.state.chains.values()].sort((a, b) => a.chainKey.localeCompare(b.chainKey));
+  const identityKeys = [...new Set([...chains.map((c) => c.chainKey), ...data.state.addressBook.keys()])].sort();
+
+  return (
+    <section className="address-book">
+      <div className="card">
+        <h3>Recorded chain identities</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>chain</th><th>recorded identity</th><th>raw bytes</th><th>derived address</th><th>status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {identityKeys.map((chainKey) => {
+              const recorded = data.state.addressBook.get(chainKey) ?? null;
+              const derived = data.addresses.find((a) => a.chainKey === chainKey);
+              const display = recorded ? displayChainBytes(data, chainKey, recorded) : null;
+              return (
+                <tr key={chainKey}>
+                  <td>
+                    {chainDescriptor(chainKey)?.displayName ?? chainKey}
+                    <div className="muted">{chainKey}</div>
+                  </td>
+                  <td className="mono break">{display?.value ?? '(none recorded)'}</td>
+                  <td className="mono break muted">{display?.raw ?? ''}</td>
+                  <td className="mono break">{derived?.address || '(not derived)'}</td>
+                  <td>
+                    {derived?.verified ? (
+                      <span className="badge ok">verified</span>
+                    ) : recorded ? (
+                      <span className="badge danger">mismatch</span>
+                    ) : (
+                      <span className="badge warn">missing</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="muted">
+          Recorded identities are on-chain policy bytes. Verified means the recorded bytes match the address this client re-derived from the Ika dWallet public key.
+        </p>
+      </div>
+
+      {chains.map((chain) => (
+        <div className="card address-chain" data-chain={chain.chainKey} key={chain.chainKey}>
+          <div className="row spread wrap">
+            <h3>{chainDescriptor(chain.chainKey)?.displayName ?? chain.chainKey}</h3>
+            <div>
+              <span className={`badge ${chain.enabled ? 'ok' : 'danger'}`}>{chain.enabled ? 'enabled' : 'disabled'}</span>
+              <span className={`badge ${chain.allowlistEnabled ? 'warn' : ''}`}>
+                {chain.allowlistEnabled ? 'allowlist enforced' : 'allowlist off'}
+              </span>
+              {chain.allowUnverified && <span className="badge warn">unverified allowed</span>}
+            </div>
+          </div>
+          <p className="muted">Blocklist entries always deny matching destinations. Allowlist entries only gate spends while allowlist enforcement is on.</p>
+          <div className="address-lists">
+            <AddressBytesTable title="Allowlist" chainKey={chain.chainKey} entries={chain.allowlist} data={data} />
+            <AddressBytesTable title="Blocklist" chainKey={chain.chainKey} entries={chain.blocklist} data={data} />
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function AddressBytesTable({
+  title,
+  chainKey,
+  entries,
+  data,
+}: {
+  title: string;
+  chainKey: string;
+  entries: string[];
+  data: RecoveredWallet;
+}) {
+  return (
+    <div className="address-list">
+      <strong>{title}</strong>
+      {entries.length === 0 ? (
+        <p className="muted">No entries.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>destination</th><th>raw bytes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((rawHex) => {
+              let display = { value: rawHex, raw: rawHex };
+              try {
+                display = displayChainBytes(data, chainKey, hexToBytes(rawHex));
+              } catch {
+                display = { value: rawHex, raw: rawHex };
+              }
+              return (
+                <tr key={rawHex}>
+                  <td className="mono break">{display.value}</td>
+                  <td className="mono break muted">{display.raw}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -492,7 +713,7 @@ function SendTab({
             <p className="muted">
               policy: per-tx max {fmtUnits(chain.perTxLimit, dec)} · fast path&nbsp;
               {fmtUnits(chain.fastPathLimit, dec)} (1 approval, no timelock) · window&nbsp;
-              {fmtUnits(chain.windowLimit - chain.spentInWindow, dec)} remaining
+              {fmtUnits(effectiveWindowRemaining(chain), dec)} remaining
             </p>
           )}
           {status && <div className="progress-line">{status}</div>}
@@ -652,7 +873,9 @@ function RequestCard({
   const chain = data.state.chains.get(req.chainKey);
   const dec = chainDescriptor(req.chainKey)?.decimals ?? 9;
   const alreadyVoted =
-    !!account && (req.approvals.includes(account.address) || req.rejections.includes(account.address));
+    !!account &&
+    (containsSuiAddress(req.approvals, account.address) ||
+      containsSuiAddress(req.rejections, account.address));
 
   // independent client-side verification before voting (mirrors Move)
   const intentCheck = useMemo(() => {
@@ -777,6 +1000,171 @@ const ACTION_LABEL: Record<number, string> = {
   [ProposalAction.SetAllowUnverified]: 'toggle unverified payloads',
 };
 
+const CREATE_PROPOSAL_ACTIONS = [
+  ProposalAction.AddSigner,
+  ProposalAction.RemoveSigner,
+  ProposalAction.SetThresholds,
+  ProposalAction.SetTimelocks,
+  ProposalAction.SetExpiry,
+  ProposalAction.SetChainLimits,
+  ProposalAction.AllowlistAdd,
+  ProposalAction.AllowlistRemove,
+  ProposalAction.BlocklistAdd,
+  ProposalAction.BlocklistRemove,
+  ProposalAction.Unpause,
+  ProposalAction.SetAddressBook,
+  ProposalAction.SetChainEnabled,
+  ProposalAction.SetAllowlistEnabled,
+  ProposalAction.SetAllowUnverified,
+] as const;
+
+type DetailRow = { label: string; value: string; mono?: boolean };
+
+function proposalUParam(proposal: AdminProposalState, index: number): bigint | null {
+  return index < proposal.uParams.length ? proposal.uParams[index] : null;
+}
+
+function fmtMaybe(value: bigint | null, fmt: (value: bigint) => string): string {
+  return value === null ? '(missing)' : fmt(value);
+}
+
+function proposalBytesRows(
+  data: RecoveredWallet,
+  proposal: AdminProposalState,
+  label: string,
+): DetailRow[] {
+  const display = displayChainBytes(data, proposal.chainKey, proposal.bytesParam);
+  const rows: DetailRow[] = [{ label, value: display.value, mono: true }];
+  if (display.raw && display.raw !== display.value) rows.push({ label: 'raw bytes', value: display.raw, mono: true });
+  return rows;
+}
+
+function proposalDetailRows(data: RecoveredWallet, proposal: AdminProposalState): DetailRow[] {
+  const rows: DetailRow[] = [];
+  if (proposal.chainKey) {
+    const name = chainDescriptor(proposal.chainKey)?.displayName ?? proposal.chainKey;
+    rows.push({ label: 'chain', value: `${name} (${proposal.chainKey})` });
+  }
+
+  switch (proposal.action) {
+    case ProposalAction.AddSigner:
+      rows.push({ label: 'new signer', value: proposal.addrParam ?? '(missing)', mono: true });
+      break;
+    case ProposalAction.RemoveSigner:
+      rows.push({ label: 'remove signer', value: proposal.addrParam ?? '(missing)', mono: true });
+      break;
+    case ProposalAction.SetThresholds:
+      rows.push(
+        { label: 'spend threshold', value: fmtMaybe(proposalUParam(proposal, 0), (v) => v.toString()) },
+        { label: 'admin threshold', value: fmtMaybe(proposalUParam(proposal, 1), (v) => v.toString()) },
+      );
+      break;
+    case ProposalAction.SetTimelocks:
+      rows.push(
+        { label: 'spend timelock', value: fmtMaybe(proposalUParam(proposal, 0), fmtDuration) },
+        { label: 'admin timelock', value: fmtMaybe(proposalUParam(proposal, 1), fmtDuration) },
+      );
+      break;
+    case ProposalAction.SetExpiry:
+      rows.push({ label: 'request expiry', value: fmtMaybe(proposalUParam(proposal, 0), fmtDuration) });
+      break;
+    case ProposalAction.SetChainLimits:
+      rows.push(
+        { label: 'fast path', value: fmtMaybe(proposalUParam(proposal, 0), (v) => fmtChainAmount(proposal.chainKey, v)) },
+        { label: 'per-tx limit', value: fmtMaybe(proposalUParam(proposal, 1), (v) => fmtChainAmount(proposal.chainKey, v)) },
+        { label: 'window limit', value: fmtMaybe(proposalUParam(proposal, 2), (v) => fmtChainAmount(proposal.chainKey, v)) },
+        { label: 'window length', value: fmtMaybe(proposalUParam(proposal, 3), fmtDuration) },
+        { label: 'fee cap', value: fmtMaybe(proposalUParam(proposal, 4), (v) => fmtChainAmount(proposal.chainKey, v)) },
+      );
+      break;
+    case ProposalAction.AllowlistAdd:
+      rows.push(...proposalBytesRows(data, proposal, 'allowlist add'));
+      break;
+    case ProposalAction.AllowlistRemove:
+      rows.push(...proposalBytesRows(data, proposal, 'allowlist remove'));
+      break;
+    case ProposalAction.BlocklistAdd:
+      rows.push(...proposalBytesRows(data, proposal, 'blocklist add'));
+      break;
+    case ProposalAction.BlocklistRemove:
+      rows.push(...proposalBytesRows(data, proposal, 'blocklist remove'));
+      break;
+    case ProposalAction.Unpause:
+      rows.push({ label: 'effect', value: 'unpause wallet' });
+      break;
+    case ProposalAction.SetAddressBook:
+      rows.push(...proposalBytesRows(data, proposal, 'record identity'));
+      break;
+    case ProposalAction.SetChainEnabled:
+      rows.push({ label: 'chain enabled', value: proposal.boolParam ? 'on' : 'off' });
+      break;
+    case ProposalAction.SetAllowlistEnabled:
+      rows.push({ label: 'allowlist enforcement', value: proposal.boolParam ? 'on' : 'off' });
+      break;
+    case ProposalAction.SetAllowUnverified:
+      rows.push({ label: 'unverified payloads', value: proposal.boolParam ? 'allowed' : 'blocked' });
+      break;
+    default:
+      rows.push(
+        { label: 'bytes', value: bytesToHex(proposal.bytesParam), mono: true },
+        { label: 'u params', value: proposal.uParams.map((v) => v.toString()).join(', ') || '(none)' },
+        { label: 'bool', value: proposal.boolParam ? 'true' : 'false' },
+      );
+  }
+
+  return rows;
+}
+
+function isChainProposal(action: number): boolean {
+  return action >= ProposalAction.SetChainLimits && action !== ProposalAction.Unpause;
+}
+
+function isDestinationBytesProposal(action: number): boolean {
+  return (
+    action === ProposalAction.AllowlistAdd ||
+    action === ProposalAction.AllowlistRemove ||
+    action === ProposalAction.BlocklistAdd ||
+    action === ProposalAction.BlocklistRemove ||
+    action === ProposalAction.SetAddressBook
+  );
+}
+
+function parseChainBytesParam({
+  value,
+  chainKey,
+  data,
+  core,
+}: {
+  value: string;
+  chainKey: string;
+  data: RecoveredWallet;
+  core: CoreCtx;
+}): Uint8Array {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error('destination / identity is required');
+  const chain = data.state.chains.get(chainKey);
+  if (!chain) throw new Error('select a chain');
+  if (chain.kind === ChainKind.Btc) return addressToScript(trimmed, BTC_NETWORK_FOR[core.network]);
+  if (chain.kind === ChainKind.Evm) return evmAddressBytes(trimmed);
+  if (chain.kind === ChainKind.Solana) return solanaAddressBytes(trimmed);
+  return hexToBytes(trimmed);
+}
+
+function bytesParamLabel(action: number, chainKey: string): string {
+  if (action === ProposalAction.SetAddressBook) return 'address book identity (chain-native)';
+  const descriptor = chainDescriptor(chainKey);
+  const name = descriptor?.displayName ?? 'chain';
+  if (
+    action === ProposalAction.AllowlistAdd ||
+    action === ProposalAction.AllowlistRemove ||
+    action === ProposalAction.BlocklistAdd ||
+    action === ProposalAction.BlocklistRemove
+  ) {
+    return `${name} destination (chain-native)`;
+  }
+  return 'destination / identity';
+}
+
 function GovernanceTab({
   core,
   walletId,
@@ -796,27 +1184,52 @@ function GovernanceTab({
   const [chainKey, setChainKey] = useState('');
   const [u1, setU1] = useState('');
   const [u2, setU2] = useState('');
+  const [u3, setU3] = useState('');
+  const [u4, setU4] = useState('');
+  const [u5, setU5] = useState('');
   const [boolParam, setBoolParam] = useState(true);
   const [bytesParam, setBytesParam] = useState('');
+  const [proposalErr, setProposalErr] = useState<string | null>(null);
+
+  const selectedChain = chainKey ? data.state.chains.get(chainKey) : null;
+  const selectedDecimals = chainDescriptor(chainKey)?.decimals ?? 0;
 
   async function createProposal() {
-    if (!core.ids) return;
-    const uParams: bigint[] = [];
-    if (action === ProposalAction.SetThresholds || action === ProposalAction.SetTimelocks) {
-      uParams.push(BigInt(u1 || '0'), BigInt(u2 || '0'));
-    } else if (action === ProposalAction.SetExpiry) {
-      uParams.push(BigInt(u1 || '0'));
+    setProposalErr(null);
+    try {
+      if (!core.ids) throw new Error('deployment not configured');
+      if (isChainProposal(action) && !chainKey) throw new Error('select a chain');
+      const uParams: bigint[] = [];
+      if (action === ProposalAction.SetThresholds) {
+        uParams.push(BigInt(u1 || '0'), BigInt(u2 || '0'));
+      } else if (action === ProposalAction.SetTimelocks) {
+        uParams.push(hoursToMs(u1 || '0'), hoursToMs(u2 || '0'));
+      } else if (action === ProposalAction.SetExpiry) {
+        uParams.push(hoursToMs(u1 || '0'));
+      } else if (action === ProposalAction.SetChainLimits) {
+        if (!selectedChain) throw new Error('select a chain');
+        uParams.push(
+          toBase(u1 || '0', selectedDecimals),
+          toBase(u2 || '0', selectedDecimals),
+          toBase(u3 || '0', selectedDecimals),
+          hoursToMs(u4 || '0'),
+          toBase(u5 || '0', selectedDecimals),
+        );
+      }
+      const needsAddr = action === ProposalAction.AddSigner || action === ProposalAction.RemoveSigner;
+      const needsBytes = isDestinationBytesProposal(action);
+      const tx = buildCreateProposalTx(core.ids, walletId, {
+        action,
+        chainKey: chainKey ? utf8(chainKey) : new Uint8Array(),
+        addrParam: needsAddr ? addrParam : null,
+        bytesParam: needsBytes ? parseChainBytesParam({ value: bytesParam, chainKey, data, core }) : new Uint8Array(),
+        uParams,
+        boolParam,
+      });
+      await act('create proposal', () => exec(tx, 'create_proposal'));
+    } catch (e) {
+      setProposalErr((e as Error).message);
     }
-    const needsAddr = action === ProposalAction.AddSigner || action === ProposalAction.RemoveSigner;
-    const tx = buildCreateProposalTx(core.ids, walletId, {
-      action,
-      chainKey: chainKey ? utf8(chainKey) : new Uint8Array(),
-      addrParam: needsAddr ? addrParam : null,
-      bytesParam: bytesParam ? hexToBytes(bytesParam) : new Uint8Array(),
-      uParams,
-      boolParam,
-    });
-    await act('create proposal', () => exec(tx, 'create_proposal'));
   }
 
   return (
@@ -838,15 +1251,15 @@ function GovernanceTab({
           <h3>New admin proposal</h3>
           <p className="muted">
             Admin actions need {data.state.adminThreshold.toString()} approvals, then wait{' '}
-            {Number(data.state.timelockAdminMs) / 3_600_000}h (veto window) before execution.
+            {fmtDuration(data.state.timelockAdminMs)} (veto window) before execution. Execution uses the wallet's current admin timelock, so changing it can move already-approved pending proposals earlier or later.
           </p>
           <div className="form">
             <label>
               Action
               <select value={action} onChange={(e) => setAction(parseInt(e.target.value))}>
-                {Object.entries(ACTION_LABEL).map(([v, label]) => (
+                {CREATE_PROPOSAL_ACTIONS.map((v) => (
                   <option key={v} value={v}>
-                    {label}
+                    {ACTION_LABEL[v]}
                   </option>
                 ))}
               </select>
@@ -857,7 +1270,7 @@ function GovernanceTab({
                 <input value={addrParam} onChange={(e) => setAddrParam(e.target.value.trim())} />
               </label>
             )}
-            {action >= ProposalAction.SetChainLimits && action !== ProposalAction.Unpause && (
+            {isChainProposal(action) && (
               <label>
                 Chain key
                 <select value={chainKey} onChange={(e) => setChainKey(e.target.value)}>
@@ -873,28 +1286,52 @@ function GovernanceTab({
             {(action === ProposalAction.SetThresholds || action === ProposalAction.SetTimelocks) && (
               <div className="row">
                 <label>
-                  {action === ProposalAction.SetThresholds ? 'spend threshold' : 'spend timelock (ms)'}
+                  {action === ProposalAction.SetThresholds ? 'spend threshold' : 'spend timelock (hours)'}
                   <input value={u1} onChange={(e) => setU1(e.target.value)} />
                 </label>
                 <label>
-                  {action === ProposalAction.SetThresholds ? 'admin threshold' : 'admin timelock (ms)'}
+                  {action === ProposalAction.SetThresholds ? 'admin threshold' : 'admin timelock (hours)'}
                   <input value={u2} onChange={(e) => setU2(e.target.value)} />
                 </label>
               </div>
             )}
             {action === ProposalAction.SetExpiry && (
               <label>
-                expiry (ms)
+                request expiry (hours)
                 <input value={u1} onChange={(e) => setU1(e.target.value)} />
               </label>
             )}
-            {(action === ProposalAction.AllowlistAdd ||
-              action === ProposalAction.AllowlistRemove ||
-              action === ProposalAction.BlocklistAdd ||
-              action === ProposalAction.BlocklistRemove ||
-              action === ProposalAction.SetAddressBook) && (
+            {action === ProposalAction.SetChainLimits && (
+              <>
+                <div className="row wrap">
+                  <label>
+                    fast path ({chainDescriptor(chainKey)?.symbol ?? 'units'})
+                    <input value={u1} onChange={(e) => setU1(e.target.value)} />
+                  </label>
+                  <label>
+                    per-tx limit ({chainDescriptor(chainKey)?.symbol ?? 'units'})
+                    <input value={u2} onChange={(e) => setU2(e.target.value)} />
+                  </label>
+                  <label>
+                    window limit ({chainDescriptor(chainKey)?.symbol ?? 'units'})
+                    <input value={u3} onChange={(e) => setU3(e.target.value)} />
+                  </label>
+                </div>
+                <div className="row wrap">
+                  <label>
+                    window length (hours)
+                    <input value={u4} onChange={(e) => setU4(e.target.value)} />
+                  </label>
+                  <label>
+                    fee cap ({chainDescriptor(chainKey)?.symbol ?? 'units'})
+                    <input value={u5} onChange={(e) => setU5(e.target.value)} />
+                  </label>
+                </div>
+              </>
+            )}
+            {isDestinationBytesProposal(action) && (
               <label>
-                destination / identity (hex)
+                {bytesParamLabel(action, chainKey)}
                 <input value={bytesParam} onChange={(e) => setBytesParam(e.target.value.trim())} />
               </label>
             )}
@@ -906,6 +1343,7 @@ function GovernanceTab({
                 value (on/off)
               </label>
             )}
+            {proposalErr && <div className="error small">{proposalErr}</div>}
             <button className="primary" onClick={() => void createProposal()}>
               create proposal
             </button>
@@ -935,11 +1373,15 @@ function ProposalCard({
   const account = useCurrentAccount();
   const voted =
     !!account &&
-    (proposal.approvals.includes(account.address) || proposal.rejections.includes(account.address));
+    (containsSuiAddress(proposal.approvals, account.address) ||
+      containsSuiAddress(proposal.rejections, account.address));
   const reached = proposal.thresholdReachedAtMs > 0n;
   const executableAt = reached
     ? Number(proposal.thresholdReachedAtMs + data.state.timelockAdminMs)
     : null;
+  const executableNow = !!executableAt && Date.now() >= executableAt;
+  const needed = Math.max(0, Number(data.state.adminThreshold) - proposal.approvals.length);
+  const detailRows = proposalDetailRows(data, proposal);
 
   return (
     <div className="card request" data-chain={proposal.chainKey || undefined}>
@@ -956,12 +1398,30 @@ function ProposalCard({
         {proposal.rejections.length}
         {executableAt && ` · executable after ${new Date(executableAt).toLocaleString()}`}
       </div>
-      {isSigner && proposal.status === RequestStatus.Pending && (
-        <div className="row">
-          {!voted && (
+      {detailRows.length > 0 && (
+        <div className="proposal-details">
+          {detailRows.map((row, index) => (
+            <div className="detail-row" key={`${row.label}:${index}`}>
+              <span className="muted">{row.label}</span>
+              <span className={`${row.mono ? 'mono ' : ''}small break`}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {reached && executableAt && (
+        <p className="muted small">
+          Uses current admin timelock ({fmtDuration(data.state.timelockAdminMs)}) from the threshold time; future timelock changes can move this execution date.
+        </p>
+      )}
+      {proposal.status === RequestStatus.Pending && (
+        <div className="row wrap">
+          {!isSigner && <span className="muted small">Connect as a wallet signer to vote.</span>}
+          {isSigner && voted && <span className="muted small">You already voted on this proposal.</span>}
+          {isSigner && !voted && (
             <>
               <button
                 className="primary"
+                disabled={!core.ids}
                 onClick={() =>
                   act('approve proposal', () =>
                     exec(buildVoteProposalTx(core.ids!, walletId, proposal.id, true), 'vote'),
@@ -972,6 +1432,7 @@ function ProposalCard({
               </button>
               <button
                 className="danger"
+                disabled={!core.ids}
                 onClick={() =>
                   act('veto proposal', () =>
                     exec(buildVoteProposalTx(core.ids!, walletId, proposal.id, false), 'vote'),
@@ -982,9 +1443,14 @@ function ProposalCard({
               </button>
             </>
           )}
-          {reached && executableAt && Date.now() >= executableAt && (
+          {!reached && <span className="muted small">Needs {needed} more approval{needed === 1 ? '' : 's'}.</span>}
+          {reached && executableAt && !executableNow && (
+            <span className="muted small">Executable after {new Date(executableAt).toLocaleString()}.</span>
+          )}
+          {isSigner && reached && executableNow && (
             <button
               className="primary"
+              disabled={!core.ids}
               onClick={() =>
                 act('execute proposal', () =>
                   exec(buildExecuteProposalTx(core.ids!, walletId, proposal.id), 'execute'),
