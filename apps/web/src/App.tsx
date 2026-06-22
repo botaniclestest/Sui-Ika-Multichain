@@ -21,9 +21,9 @@ export default function App() {
     <div className="shell">
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
-          <span className="brand-glyph" aria-hidden="true">M</span>
+          <span className="brand-glyph" aria-hidden="true">s</span>
           <span className="brand-text">
-            Mythos<span className="accent">Policy Wallet</span>
+            stINKy<span className="accent">Multichain Policy Wallet</span>
           </span>
         </div>
         <div className="header-right">
@@ -45,7 +45,7 @@ export default function App() {
             <span className="chain-dot" data-chain="solana:mainnet" />
             <span className="chain-dot" data-chain="sui:vault" />
           </div>
-          <h1>Policy-controlled multichain wallet</h1>
+          <h1>stINKy Multichain Policy Wallet</h1>
           <p>
             BTC, EVM, Solana and Sui assets under one Sui-enforced policy, signed by Ika MPC.
             Nothing to back up except your Sui key: every wallet, address, rule and pending

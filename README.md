@@ -1,4 +1,4 @@
-# Mythos Multichain Policy Wallet
+# stINKy Multichain Policy Wallet
 
 A persistent, recoverable, policy-controlled multichain wallet.
 **Sui mainnet is the control plane; Ika dWallets/MPC are the signing plane.**
@@ -13,6 +13,10 @@ There is nothing to back up except your Sui signer keys. If this website,
 your browser profile and your laptop all disappear, any signer recovers
 every address, rule and pending request from public Sui state
 (see [docs/RECOVERY.md](docs/RECOVERY.md)).
+
+The web dashboard re-derives chain addresses, shows recovered target-chain
+balances, displays decoded governance proposal details, and includes an
+Address Book tab for recorded identities plus allow/block lists by chain.
 
 > **Honesty first:** the code is complete and tested (42 Move tests,
 > 17 TypeScript tests with byte-exact cross-checks), but it is **not
