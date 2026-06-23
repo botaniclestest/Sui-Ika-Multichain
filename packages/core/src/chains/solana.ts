@@ -129,7 +129,8 @@ export interface SolPayer {
   sendTransaction?(tx: SolTransaction): Promise<string>;
 }
 
-const MAINNET_SOLANA_RPC_FALLBACKS = ['https://api.mainnet-beta.solana.com'];
+// Keep this empty unless an endpoint is verified to work from browser CORS.
+const MAINNET_SOLANA_RPC_FALLBACKS: string[] = [];
 
 function solanaRpcCandidates(primary: string): string[] {
   const urls = [primary];
@@ -360,6 +361,13 @@ export async function createDurableNonceAccount(
     }
   } catch (error) {
     if (isSolanaBlockhashExpiredError(error)) {
+      const landedNonce = sig ? await fetchNonceAfterConfirmation(rpcUrl, nonceAccount.publicKey) : null;
+      if (landedNonce) {
+        return {
+          noncePubkey: nonceAccount.publicKey.toBase58(),
+          nonceValue: landedNonce.nonce,
+        };
+      }
       throw new SolanaBlockhashExpiredError(
         sig
           ? `Solana nonce-rent transaction ${sig} expired before confirmation. Retry once. No spend request was created.`
