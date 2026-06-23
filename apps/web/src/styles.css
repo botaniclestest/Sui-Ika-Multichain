@@ -170,14 +170,13 @@ body::before {
 .squid-backdrop {
   position: fixed;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   pointer-events: none;
-  background-position: right top;
+  background-position: center center;
   background-repeat: no-repeat;
-  background-size: min(1180px, 92vw) auto;
-  opacity: 0.16;
-  filter: saturate(1.05) contrast(1.04);
-  mix-blend-mode: screen;
+  background-size: cover;
+  opacity: 0.92;
+  filter: saturate(1.08) contrast(1.04);
 }
 
 .squid-backdrop::after {
@@ -185,8 +184,13 @@ body::before {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, var(--bg) 0%, rgba(6, 8, 13, 0.78) 45%, rgba(6, 8, 13, 0.28) 100%),
-    linear-gradient(180deg, rgba(6, 8, 13, 0.04) 0%, var(--bg) 100%);
+    radial-gradient(900px 600px at 48% 24%, rgba(6, 8, 13, 0.08), transparent 62%),
+    linear-gradient(180deg, rgba(6, 8, 13, 0.18) 0%, rgba(6, 8, 13, 0.48) 100%);
+}
+
+.shell > :not(.squid-backdrop) {
+  position: relative;
+  z-index: 1;
 }
 
 @keyframes shell-fade-in {
@@ -793,9 +797,8 @@ tr.disabled { opacity: 0.5; }
 }
 @media (max-width: 720px) {
   .squid-backdrop {
-    background-position: 65% top;
-    background-size: 980px auto;
-    opacity: 0.10;
+    background-position: 58% top;
+    opacity: 0.86;
   }
 
   .send-layout { grid-template-columns: 1fr; }
