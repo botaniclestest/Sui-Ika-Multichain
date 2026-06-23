@@ -8,12 +8,12 @@ Last updated: 2026-06-23
 - Current branch is `main`.
 - GitHub remote is `git@github.com:botaniclestest/Sui-Ika-Multichain.git`.
 - Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends`.
-- This handoff records the subsequent testnet package upgrade and deployment metadata update.
+- This handoff records the subsequent testnet package upgrade, deployment metadata update, and Sui Vault direct-transfer diagnostics fix.
 - Sui CLI active environment is currently `testnet`.
 - Local preview is running from rebuilt output at `http://localhost:4173/` and `http://192.168.68.76:4173/`.
 - Preview process details at handoff:
-  - wrapper PID `2904493`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
-  - Vite PID `2904518`: `vite preview --host 0.0.0.0`
+  - wrapper PID `2907361`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
+  - Vite PID `2907385`: `vite preview --host 0.0.0.0`
 
 ## What This Project Is
 
@@ -41,6 +41,23 @@ Last updated: 2026-06-23
 - Upgraded the testnet Move package so SPL verifier support is live on testnet.
 - Updated local deployment metadata to point the web app at the upgraded testnet package.
 - Rebuilt and restarted the local preview server.
+- Fixed Sui Vault balance confusion after direct transfers to the wallet object ID:
+  - `packages/core/src/recovery/balances.ts` now reads `getAllBalances({ owner: walletId })` in addition to the internal vault Bag.
+  - Direct-send Sui coins are shown as red, non-spendable `sui-address` rows instead of being silently hidden.
+  - The Send asset dropdown still only includes spendable vault/deposited assets.
+  - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
+- Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
+
+## Sui Vault Direct-Transfer Incident
+
+- Testnet wallet `0x7fc82c013ce85e321438a9461f795e5ec9e632ddecb33bd21cf1b45dcd1849d6` has direct address-owned coins at the wallet object ID:
+  - `0.3 SUI` as `0x2::sui::SUI`.
+  - `0.5 WAL` as `0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL`.
+- The internal contract vault Bag for that wallet is empty, so those direct-send coins are not spendable by `execute_vault_spend<T>`.
+- Root cause: the UI displayed the Sui Vault wallet object ID like an address, but the contract only treats coins as spendable after `vault_deposit<T>` receives a coin in a Sui transaction.
+- Current UI behavior: direct-send balances are visible in Overview with the warning `sent to wallet object address, not deposited into the spendable vault`.
+- Future deposits should use the Overview `Deposit to Sui Vault` form with coin type, amount, and decimals.
+- Do not direct-send Sui coins to the wallet object ID unless a recovery/ingest path is explicitly implemented and tested.
 
 ## Testnet Deployment
 
@@ -70,6 +87,11 @@ Last updated: 2026-06-23
 - `pnpm --filter @mythos/wallet-core build`: passed.
 - `pnpm test:move`: passed, 46 tests.
 - `pnpm --filter @mythos/web build`: passed after deployment metadata update.
+- After the Sui Vault direct-transfer diagnostics fix:
+  - `pnpm --filter @mythos/wallet-core typecheck`: passed.
+  - `pnpm --filter @mythos/wallet-core test`: passed, 19 tests.
+  - `pnpm --filter @mythos/wallet-core build && pnpm --filter @mythos/web build`: passed.
+  - Live testnet query confirmed the direct-send rows show `0.3 SUI` and `0.5 WAL` with non-spendable status.
 - `git diff --check origin/main...HEAD`: passed before pushing feature commits.
 - Strict outgoing diff credential-format scan returned no matches before pushing feature commits.
 - Testnet upgrade dry-run first failed because `Published.toml` still pointed at the original package; aligning testnet `published-at` to the previous latest package fixed the package mismatch.
@@ -111,10 +133,11 @@ Known non-blocking warnings:
 
 ## Remaining Work
 
-- Commit and push the deployment metadata and `progress.md` updates.
 - Hard refresh `http://localhost:4173/` before browser QA.
 - Test on testnet:
   - Sui Vault asset dropdown with SUI/IKA vault balances.
+  - Sui Vault deposit form for SUI and WAL from the connected signer wallet.
+  - Direct-send Sui object-address rows should appear in Overview but not Send.
   - EVM configured token dropdown entries when token balances exist.
   - Solana SPL token balance discovery.
   - Solana SPL spend request creation, vote, timelock, execute, and broadcast.

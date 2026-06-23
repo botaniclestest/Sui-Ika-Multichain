@@ -350,6 +350,23 @@ function Overview({
   act: (label: string, fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const exec = useExec();
+  const [vaultCoinType, setVaultCoinType] = useState('0x2::sui::SUI');
+  const [vaultAmount, setVaultAmount] = useState('1');
+  const [vaultDecimals, setVaultDecimals] = useState('9');
+
+  async function depositVaultCoin() {
+    if (!core.ids) throw new Error('contract ids not ready');
+    const decimals = Number.parseInt(vaultDecimals, 10);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      throw new Error('decimals must be an integer between 0 and 18');
+    }
+    const coinType = normalizeSuiCoinType(vaultCoinType);
+    const amount = toBase(vaultAmount, decimals);
+    if (amount <= 0n) throw new Error('amount must be greater than zero');
+    await exec(buildVaultDepositTx(core.ids, walletId, coinType, amount), 'vault deposit');
+    await balances.refresh();
+  }
+
   return (
     <section>
       <div className="card">
@@ -382,6 +399,10 @@ function Overview({
         <p className="muted">
           "verified" = the on-chain recorded identity matches what this client independently
           derives from the dWallet public output. Never approve spends on an unverified chain.
+        </p>
+        <p className="warning small">
+          Sui Vault uses the wallet object ID for policy, but direct transfers to that ID are not vault deposits.
+          Use the deposit form below so coins enter the contract vault and become spendable.
         </p>
       </div>
 
@@ -500,15 +521,29 @@ function Overview({
                 + ed25519 presign
               </button>
             )}
-            <button
-              onClick={() =>
-                act('vault deposit', () =>
-                  exec(buildVaultDepositTx(core.ids!, walletId, '0x2::sui::SUI', 1_000_000_000n), 'vault'),
-                )
-              }
-            >
-              deposit 1 SUI to vault
-            </button>
+          </div>
+        )}
+        {core.ids && (
+          <div className="vault-deposit form">
+            <h4>Deposit to Sui Vault</h4>
+            <p className="muted small">
+              This calls `vault_deposit&lt;T&gt;`. Do not direct-send Sui coins to the wallet object ID.
+            </p>
+            <label>
+              Coin type
+              <input value={vaultCoinType} onChange={(e) => setVaultCoinType(e.target.value.trim())} />
+            </label>
+            <div className="row wrap">
+              <label>
+                Amount
+                <input value={vaultAmount} onChange={(e) => setVaultAmount(e.target.value.trim())} />
+              </label>
+              <label>
+                Decimals
+                <input value={vaultDecimals} onChange={(e) => setVaultDecimals(e.target.value.trim())} />
+              </label>
+              <button onClick={() => act('vault deposit', depositVaultCoin)}>deposit to vault</button>
+            </div>
           </div>
         )}
       </div>
