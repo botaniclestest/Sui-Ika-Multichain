@@ -52,7 +52,7 @@ export const DEFAULT_CONFIGS: Record<SuiNetwork, MythosNetworkConfig> = {
       'eip155:42161': 'https://arb1.arbitrum.io/rpc',
       'eip155:10': 'https://mainnet.optimism.io',
     },
-    solanaRpcUrl: 'https://api.mainnet-beta.solana.com',
+    solanaRpcUrl: 'https://solana-rpc.publicnode.com',
   },
 };
 

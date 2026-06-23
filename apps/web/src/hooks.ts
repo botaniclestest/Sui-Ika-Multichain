@@ -347,7 +347,9 @@ export function useCreateSpend(core: CoreCtx) {
           preselectedPresigns = await selectPresigns(1, true);
           const { resolveSolanaPayer } = await import('./solana-gas');
           const resolved = await resolveSolanaPayer();
-          setStatus(`creating durable nonce account (rent via ${resolved.source}: ${resolved.address.slice(0, 8)}...)`);
+          setStatus(
+            `creating durable nonce account (approve promptly; rent via ${resolved.source}: ${resolved.address.slice(0, 8)}...)`,
+          );
           const nonce = await createDurableNonceAccount(
             cfg.solanaRpcUrl,
             dwallet.publicKey,

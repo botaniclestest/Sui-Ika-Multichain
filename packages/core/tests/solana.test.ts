@@ -6,6 +6,8 @@ import {
   buildSolDurableTransfer,
   buildSolTransfer,
   deriveSolanaAddress,
+  isSolanaBlockhashExpiredError,
+  SolanaBlockhashExpiredError,
   solanaAddressBytes,
 } from '../src/chains/solana.js';
 import { checkSolIntent } from '../src/verify/intent.js';
@@ -113,6 +115,20 @@ describe('solana adapter', () => {
 
 describe('solana durable nonce', () => {
   const NONCE = { noncePubkey: '7Y9dRMi9aGYgWnRNw4Sv5capNZWNXgrTPiYnGPzMYTQS', nonceValue: BLOCKHASH };
+
+  it('recognizes blockhash expiry errors from web3.js', () => {
+    expect(
+      isSolanaBlockhashExpiredError(
+        new Error('Signature 4VS2VGa3vMEnQpRZDRP3b5tATXTxEZ4pkrs9Y9MSFQMmvs has expired: block height exceeded.'),
+      ),
+    ).toBe(true);
+    expect(
+      isSolanaBlockhashExpiredError(
+        new SolanaBlockhashExpiredError('Solana nonce-rent transaction expired before confirmation.'),
+      ),
+    ).toBe(true);
+    expect(isSolanaBlockhashExpiredError(new Error('insufficient funds for rent'))).toBe(false);
+  });
 
   it('builds a durable-nonce transfer web3.js can verify end-to-end', () => {
     const plan = buildSolDurableTransfer({

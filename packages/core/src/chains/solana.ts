@@ -128,6 +128,24 @@ export interface SolPayer {
   signTransaction(tx: SolTransaction): Promise<SolTransaction>;
 }
 
+export class SolanaBlockhashExpiredError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = 'SolanaBlockhashExpiredError';
+  }
+}
+
+export function isSolanaBlockhashExpiredError(error: unknown): boolean {
+  if (error instanceof SolanaBlockhashExpiredError) return true;
+  const name = typeof error === 'object' && error !== null && 'name' in error
+    ? String((error as { name?: unknown }).name ?? '')
+    : '';
+  const message = error instanceof Error ? error.message : String(error);
+  return /blockhash not found|block height exceeded|signature .* has expired|TransactionExpiredBlockheightExceededError/i.test(
+    `${name} ${message}`,
+  );
+}
+
 export function payerFromKeypair(keypair: Keypair): SolPayer {
   return {
     publicKey: keypair.publicKey,
@@ -170,7 +188,7 @@ export async function createDurableNonceAccount(
     );
   }
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('processed');
   const tx = new SolTransaction({
     feePayer: payer.publicKey,
     blockhash,
@@ -186,11 +204,32 @@ export async function createDurableNonceAccount(
   );
   tx.partialSign(nonceAccount);
   const signed = await payer.signTransaction(tx);
-  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
-  await connection.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    'confirmed',
-  );
+
+  const currentBlockHeight = await connection.getBlockHeight('processed');
+  if (currentBlockHeight > lastValidBlockHeight) {
+    throw new SolanaBlockhashExpiredError(
+      'Solana nonce-rent transaction expired while waiting for wallet approval. Retry and approve the browser-wallet signature promptly; no nonce account was created.',
+    );
+  }
+
+  let sig: string | null = null;
+  try {
+    sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+    await connection.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      'confirmed',
+    );
+  } catch (error) {
+    if (isSolanaBlockhashExpiredError(error)) {
+      throw new SolanaBlockhashExpiredError(
+        sig
+          ? `Solana nonce-rent transaction ${sig} expired before confirmation. Retry and approve the browser-wallet signature promptly. No spend request was created.`
+          : 'Solana nonce-rent transaction expired before broadcast. Retry and approve the browser-wallet signature promptly; no nonce rent was spent.',
+        error,
+      );
+    }
+    throw error;
+  }
 
   const nonceInfo = await connection.getNonce(nonceAccount.publicKey, 'confirmed');
   if (!nonceInfo) throw new Error('nonce account not found after creation');
