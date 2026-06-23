@@ -115,6 +115,31 @@ body {
   min-height: 100%;
 }
 
+body::before {
+  content: '';
+  position: fixed;
+  inset: -18% -12%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.34;
+  background:
+    radial-gradient(36% 22% at 18% 82%, rgba(183, 255, 202, 0.28), transparent 62%),
+    radial-gradient(28% 18% at 35% 90%, rgba(32, 243, 166, 0.22), transparent 68%),
+    radial-gradient(30% 20% at 64% 78%, rgba(183, 255, 202, 0.14), transparent 70%),
+    radial-gradient(22% 16% at 82% 88%, rgba(32, 243, 166, 0.18), transparent 70%);
+  transform: translate3d(0, 0, 0) scale(1.02);
+  animation: gas-drift 26s var(--ease) infinite alternate;
+}
+
+@keyframes gas-drift {
+  from { transform: translate3d(-1.5%, 1%, 0) scale(1.02); opacity: 0.26; }
+  to { transform: translate3d(1.8%, -1.2%, 0) scale(1.05); opacity: 0.40; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
+}
+
 ::selection { background: rgba(255, 95, 135, 0.35); color: #fff; }
 
 /* Slim custom scrollbar */
@@ -134,6 +159,8 @@ body {
    ============================================================ */
 
 .shell {
+  position: relative;
+  z-index: 1;
   max-width: 1080px;
   margin: 0 auto;
   padding: 0 20px 80px;
