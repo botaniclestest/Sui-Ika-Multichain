@@ -343,8 +343,6 @@ export function useCreateSpend(core: CoreCtx) {
           // Rent is paid faucet-free by a connected Solana wallet or the
           // local dust-only gas tank (identical on devnet and mainnet).
           destinationBytes = solanaAddressBytes(draft.destination);
-          setStatus('checking Solana presign...');
-          preselectedPresigns = await selectPresigns(1, true);
           const { resolveSolanaPayer } = await import('./solana-gas');
           const resolved = await resolveSolanaPayer();
           setStatus(
@@ -370,6 +368,8 @@ export function useCreateSpend(core: CoreCtx) {
           });
           if (!check.ok) throw new Error(`intent check failed: ${check.errors.join('; ')}`);
           messages = [plan.message];
+          setStatus('checking Solana presign...');
+          preselectedPresigns = await selectPresigns(1, true);
         } else {
           throw new Error('unsupported chain kind');
         }

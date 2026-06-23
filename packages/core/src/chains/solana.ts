@@ -126,6 +126,21 @@ export function buildSolDurableTransfer(params: {
 export interface SolPayer {
   publicKey: PublicKey;
   signTransaction(tx: SolTransaction): Promise<SolTransaction>;
+  sendTransaction?(tx: SolTransaction): Promise<string>;
+}
+
+const MAINNET_SOLANA_RPC_FALLBACKS = ['https://api.mainnet-beta.solana.com'];
+
+function solanaRpcCandidates(primary: string): string[] {
+  const urls = [primary];
+  if (primary.includes('mainnet') || primary.includes('publicnode.com')) {
+    urls.push(...MAINNET_SOLANA_RPC_FALLBACKS);
+  }
+  return [...new Set(urls.filter(Boolean))];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class SolanaBlockhashExpiredError extends Error {
@@ -154,6 +169,126 @@ export function payerFromKeypair(keypair: Keypair): SolPayer {
       return tx;
     },
   };
+}
+
+async function getAnyBlockHeight(connections: Connection[]): Promise<number> {
+  let lastError: unknown;
+  for (const connection of connections) {
+    try {
+      return await connection.getBlockHeight('processed');
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function confirmRecentBlockhashSignature(
+  rpcUrl: string,
+  signature: string,
+  lastValidBlockHeight: number,
+): Promise<void> {
+  const connections = solanaRpcCandidates(rpcUrl).map((url) => new Connection(url, 'processed'));
+
+  for (;;) {
+    for (const connection of connections) {
+      try {
+        const status = (await connection.getSignatureStatuses([signature])).value[0];
+        if (status?.err) {
+          throw new Error(`Solana nonce-rent transaction ${signature} failed: ${JSON.stringify(status.err)}`);
+        }
+        if (
+          status?.confirmationStatus === 'confirmed' ||
+          status?.confirmationStatus === 'finalized' ||
+          status?.confirmations === null
+        ) {
+          return;
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('failed:')) throw error;
+      }
+    }
+
+    if ((await getAnyBlockHeight(connections)) > lastValidBlockHeight) {
+      throw new SolanaBlockhashExpiredError(
+        `Solana nonce-rent transaction ${signature} expired before confirmation. Retry once; no spend request was created.`,
+      );
+    }
+    await sleep(1_000);
+  }
+}
+
+async function sendAndConfirmRawRecentBlockhashTransaction(params: {
+  rpcUrl: string;
+  rawTransaction: Uint8Array;
+  lastValidBlockHeight: number;
+}): Promise<string> {
+  const connections = solanaRpcCandidates(params.rpcUrl).map((url) => new Connection(url, 'processed'));
+  let signature: string | null = null;
+  let firstError: unknown;
+
+  const send = async (connection: Connection, skipPreflight: boolean) => {
+    try {
+      const sent = await connection.sendRawTransaction(params.rawTransaction, {
+        skipPreflight,
+        preflightCommitment: 'processed',
+        maxRetries: skipPreflight ? 0 : 20,
+      });
+      signature ??= sent;
+    } catch (error) {
+      firstError ??= error;
+    }
+  };
+
+  await Promise.all(connections.map((connection) => send(connection, false)));
+  if (!signature) {
+    throw firstError instanceof Error ? firstError : new Error(String(firstError));
+  }
+
+  for (;;) {
+    for (const connection of connections) {
+      try {
+        const status = (await connection.getSignatureStatuses([signature])).value[0];
+        if (status?.err) {
+          throw new Error(`Solana nonce-rent transaction ${signature} failed: ${JSON.stringify(status.err)}`);
+        }
+        if (
+          status?.confirmationStatus === 'confirmed' ||
+          status?.confirmationStatus === 'finalized' ||
+          status?.confirmations === null
+        ) {
+          return signature;
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('failed:')) throw error;
+      }
+    }
+
+    if ((await getAnyBlockHeight(connections)) > params.lastValidBlockHeight) {
+      throw new SolanaBlockhashExpiredError(
+        `Solana nonce-rent transaction ${signature} expired before confirmation. Retry once; no spend request was created.`,
+      );
+    }
+
+    await Promise.all(connections.map((connection) => send(connection, true)));
+    await sleep(1_000);
+  }
+}
+
+async function fetchNonceAfterConfirmation(rpcUrl: string, noncePubkey: PublicKey) {
+  const connections = solanaRpcCandidates(rpcUrl).map((url) => new Connection(url, 'confirmed'));
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (const connection of connections) {
+      try {
+        const nonceInfo = await connection.getNonce(noncePubkey, 'confirmed');
+        if (nonceInfo) return nonceInfo;
+      } catch {
+        /* try the next RPC */
+      }
+    }
+    await sleep(500);
+  }
+  return null;
 }
 
 /** Rent + fee the payer needs to create one nonce account, in lamports. */
@@ -203,27 +338,31 @@ export async function createDurableNonceAccount(
     }).instructions,
   );
   tx.partialSign(nonceAccount);
-  const signed = await payer.signTransaction(tx);
-
-  const currentBlockHeight = await connection.getBlockHeight('processed');
-  if (currentBlockHeight > lastValidBlockHeight) {
-    throw new SolanaBlockhashExpiredError(
-      'Solana nonce-rent transaction expired while waiting for wallet approval. Retry and approve the browser-wallet signature promptly; no nonce account was created.',
-    );
-  }
 
   let sig: string | null = null;
   try {
-    sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
-    await connection.confirmTransaction(
-      { signature: sig, blockhash, lastValidBlockHeight },
-      'confirmed',
-    );
+    if (payer.sendTransaction) {
+      sig = await payer.sendTransaction(tx);
+      await confirmRecentBlockhashSignature(rpcUrl, sig, lastValidBlockHeight);
+    } else {
+      const signed = await payer.signTransaction(tx);
+      const currentBlockHeight = await connection.getBlockHeight('processed');
+      if (currentBlockHeight > lastValidBlockHeight) {
+        throw new SolanaBlockhashExpiredError(
+          'Solana nonce-rent transaction expired while waiting for wallet approval. Retry and approve the browser-wallet signature promptly; no nonce account was created.',
+        );
+      }
+      sig = await sendAndConfirmRawRecentBlockhashTransaction({
+        rpcUrl,
+        rawTransaction: signed.serialize(),
+        lastValidBlockHeight,
+      });
+    }
   } catch (error) {
     if (isSolanaBlockhashExpiredError(error)) {
       throw new SolanaBlockhashExpiredError(
         sig
-          ? `Solana nonce-rent transaction ${sig} expired before confirmation. Retry and approve the browser-wallet signature promptly. No spend request was created.`
+          ? `Solana nonce-rent transaction ${sig} expired before confirmation. Retry once. No spend request was created.`
           : 'Solana nonce-rent transaction expired before broadcast. Retry and approve the browser-wallet signature promptly; no nonce rent was spent.',
         error,
       );
@@ -231,7 +370,7 @@ export async function createDurableNonceAccount(
     throw error;
   }
 
-  const nonceInfo = await connection.getNonce(nonceAccount.publicKey, 'confirmed');
+  const nonceInfo = await fetchNonceAfterConfirmation(rpcUrl, nonceAccount.publicKey);
   if (!nonceInfo) throw new Error('nonce account not found after creation');
   return {
     noncePubkey: nonceAccount.publicKey.toBase58(),

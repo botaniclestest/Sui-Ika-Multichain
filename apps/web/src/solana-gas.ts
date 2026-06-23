@@ -22,6 +22,7 @@ interface InjectedSolana {
   publicKey?: { toBytes(): Uint8Array };
   connect(): Promise<{ publicKey: { toBytes(): Uint8Array } }>;
   signTransaction(tx: SolTransaction): Promise<SolTransaction>;
+  signAndSendTransaction?(tx: SolTransaction): Promise<{ signature: string } | string>;
 }
 
 function injectedProvider(): InjectedSolana | null {
@@ -89,6 +90,12 @@ export async function resolveSolanaPayer(): Promise<ResolvedPayer> {
         payer: {
           publicKey: new PublicKey(publicKey.toBytes()),
           signTransaction: (tx) => provider.signTransaction(tx),
+          sendTransaction: provider.signAndSendTransaction
+            ? async (tx) => {
+                const result = await provider.signAndSendTransaction!(tx);
+                return typeof result === 'string' ? result : result.signature;
+              }
+            : undefined,
         },
         source: 'browser-wallet',
         address: new PublicKey(publicKey.toBytes()).toBase58(),
