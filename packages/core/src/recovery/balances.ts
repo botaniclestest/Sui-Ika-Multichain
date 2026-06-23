@@ -11,7 +11,7 @@ import type { RecoveredWallet } from './discovery.js';
 export interface ChainBalanceRow {
   chainKey: string;
   kind: ChainKindValue;
-  assetKind: 'native' | 'token' | 'vault-coin' | 'sui-address-coin';
+  assetKind: 'native' | 'token' | 'vault-coin';
   assetId: string;
   label: string;
   symbol: string;
@@ -19,7 +19,7 @@ export interface ChainBalanceRow {
   amount: bigint | null;
   confirmedAmount?: bigint;
   pendingAmount?: bigint;
-  source: 'btc-esplora' | 'evm-rpc' | 'solana-rpc' | 'sui-vault' | 'sui-address';
+  source: 'btc-esplora' | 'evm-rpc' | 'solana-rpc' | 'sui-vault';
   address?: string;
   tokenAccount?: string;
   mint?: string;
@@ -154,10 +154,7 @@ export async function fetchRecoveredBalances(params: {
         }
 
         if (chain.kind === ChainKind.SuiVault) {
-          const [vaultBalances, directBalances] = await Promise.all([
-            getVaultBalances(suiClient, recovered.state.walletId),
-            fetchSuiAddressBalances(suiClient, recovered.state.walletId),
-          ]);
+          const vaultBalances = await getVaultBalances(suiClient, recovered.state.walletId);
           const rows: ChainBalanceRow[] = await Promise.all(
             vaultBalances.map(async (balance) => {
               const metadata = await fetchSuiCoinMetadata(suiClient, balance.coinType);
@@ -175,27 +172,6 @@ export async function fetchRecoveredBalances(params: {
                 status: 'ok' as const,
               };
             }),
-          );
-          rows.push(
-            ...(await Promise.all(
-              directBalances.map(async (balance) => {
-                const metadata = await fetchSuiCoinMetadata(suiClient, balance.coinType);
-                return {
-                  chainKey: chain.chainKey,
-                  kind: chain.kind,
-                  assetKind: 'sui-address-coin' as const,
-                  assetId: balance.coinType,
-                  label: `${metadata.name ?? balance.coinType} (direct transfer)`,
-                  symbol: metadata.symbol ?? suiVaultSymbol(balance.coinType),
-                  decimals: metadata.decimals ?? suiVaultDecimals(balance.coinType),
-                  amount: balance.amount,
-                  source: 'sui-address' as const,
-                  address: recovered.state.walletId,
-                  status: 'error' as const,
-                  error: 'sent to wallet object address, not deposited into the spendable vault',
-                };
-              }),
-            )),
           );
           if (rows.length === 0) {
             rows.push({
@@ -253,19 +229,6 @@ export async function fetchRecoveredBalances(params: {
   return (await Promise.all(tasks)).flat();
 }
 
-async function fetchSuiAddressBalances(
-  client: SuiClient,
-  owner: string,
-): Promise<Array<{ coinType: string; amount: bigint }>> {
-  const balances = await client.getAllBalances({ owner });
-  return balances
-    .map((balance) => ({
-      coinType: normalizeSuiTypeName(balance.coinType),
-      amount: BigInt(balance.totalBalance),
-    }))
-    .filter((balance) => balance.amount > 0n);
-}
-
 function balanceSourceFor(kind: ChainKindValue): ChainBalanceRow['source'] {
   if (kind === ChainKind.Btc) return 'btc-esplora';
   if (kind === ChainKind.Solana) return 'solana-rpc';
@@ -311,11 +274,4 @@ function knownSuiCoinMetadata(coinType: string): { symbol?: string; decimals?: n
 
 function shortId(value: string): string {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
-}
-
-function normalizeSuiTypeName(typeName: string): string {
-  return typeName.replace(/^(0x)?([0-9a-fA-F]{64})(::)/, (_match, _prefix, addr, sep) => {
-    const short = BigInt(`0x${addr}`).toString(16);
-    return `0x${short}${sep}`;
-  });
 }

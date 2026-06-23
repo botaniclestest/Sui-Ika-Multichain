@@ -390,7 +390,14 @@ function Overview({
             {data.addresses.map((a) => (
               <tr key={a.chainKey}>
                 <td>{a.chainKey}</td>
-                <td className="mono">{a.address || '(dWallet pending)'}</td>
+                <td className="mono">
+                  {a.address || '(dWallet pending)'}
+                  {a.kind === ChainKind.SuiVault && (
+                    <span className="badge danger vault-address-flag">
+                      DO NOT SEND DIRECTLY TO THIS ADDRESS. USE DEPOSIT TO VAULT FUNCTION BELOW.
+                    </span>
+                  )}
+                </td>
                 <td>{a.verified ? <span className="badge ok">verified</span> : <span className="badge danger">UNVERIFIED</span>}</td>
               </tr>
             ))}
@@ -399,10 +406,6 @@ function Overview({
         <p className="muted">
           "verified" = the on-chain recorded identity matches what this client independently
           derives from the dWallet public output. Never approve spends on an unverified chain.
-        </p>
-        <p className="warning small">
-          Sui Vault uses the wallet object ID for policy, but direct transfers to that ID are not vault deposits.
-          Use the deposit form below so coins enter the contract vault and become spendable.
         </p>
       </div>
 

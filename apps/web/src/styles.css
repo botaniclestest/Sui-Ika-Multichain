@@ -457,6 +457,7 @@ label.row { flex-direction: row; align-items: center; color: var(--text); }
 .badge.ok { background: var(--ok-soft); color: var(--ok); border: 1px solid rgba(46, 204, 113, 0.35); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(255, 84, 102, 0.35); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid rgba(240, 180, 41, 0.35); }
+.badge.vault-address-flag { text-transform: none; white-space: normal; vertical-align: middle; }
 .badge.chain {
   background: color-mix(in srgb, var(--chain-color) 14%, transparent);
   color: var(--chain-color);
