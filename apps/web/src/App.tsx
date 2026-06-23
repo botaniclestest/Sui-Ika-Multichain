@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useCurrentAccount } from '@mysten/dapp-kit-react';
+import { useEffect, useState } from 'react';
+import { useCurrentAccount, useCurrentNetwork, useDAppKit } from '@mysten/dapp-kit-react';
 import { ConnectButton } from '@mysten/dapp-kit-react/ui';
 import type { SuiNetwork } from '@mythos/wallet-core';
 import { getDeployment, setDeploymentOverride } from './config';
@@ -10,12 +10,24 @@ import { Dashboard } from './components/Dashboard';
 type View = { kind: 'list' } | { kind: 'create' } | { kind: 'wallet'; walletId: string };
 
 export default function App() {
+  const dAppKit = useDAppKit();
+  const dAppNetwork = useCurrentNetwork() as SuiNetwork;
   const [network, setNetwork] = useState<SuiNetwork>('testnet');
   const [view, setView] = useState<View>({ kind: 'list' });
   const account = useCurrentAccount();
   const core = useCore(network);
   const { wallets, loading, refresh } = useMyWallets(core);
   const deployment = getDeployment(network);
+
+  useEffect(() => {
+    if (dAppNetwork !== network) dAppKit.switchNetwork(network);
+  }, [dAppKit, dAppNetwork, network]);
+
+  function changeNetwork(next: SuiNetwork) {
+    setNetwork(next);
+    dAppKit.switchNetwork(next);
+    setView({ kind: 'list' });
+  }
 
   return (
     <div className="shell">
@@ -27,7 +39,7 @@ export default function App() {
           </span>
         </div>
         <div className="header-right">
-          <select value={network} onChange={(e) => setNetwork(e.target.value as SuiNetwork)}>
+          <select value={network} onChange={(e) => changeNetwork(e.target.value as SuiNetwork)}>
             <option value="testnet">Sui Testnet</option>
             <option value="mainnet">Sui Mainnet</option>
           </select>
