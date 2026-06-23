@@ -7,5 +7,12 @@
     "publishDigest": "8Q2MWR6HQjFs9J2Zky9Zuvw2ci3wg7pSEUBFFN5q5LE2",
     "latestPackageId": "0x2b36d2b823448cf4366832db0e6a6b5f18fe5567406cfc1f17ace951e1762b08",
     "lastUpgradeDigest": "7bjcKvnW6eRecaXdj63CHLuRFDkdusms1BmAcjrS4dQS"
+  },
+  "mainnet": {
+    "policyPackageId": "0x78a1fe63d6b76fe4eb8b442e82e21238c1ee59d516c2e690bfcd5884fec329c5",
+    "registryId": "0xb1e7559aefc556f116fd06a1e4a1eda771192569d5cc031f6648f681b572f440",
+    "upgradeCapId": "0xf67d97b4a3b8595a174a4a17a0046e380c06cb838bb070b16734950cda3be714",
+    "publishedAt": "2026-06-23T00:00:19.000Z",
+    "publishDigest": "3itrJhp1fYWPEQNRUpiXj67aAikgLC7BP8ANQSF34mwF"
   }
 }

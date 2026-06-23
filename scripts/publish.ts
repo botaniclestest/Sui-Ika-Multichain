@@ -44,20 +44,31 @@ function main() {
   );
   const result = JSON.parse(raw);
 
-  const status = result?.effects?.status?.status ?? result?.effects?.status;
-  if (status !== 'success' && status?.status !== 'success') {
+  const status = result?.effects?.V2?.status ?? result?.effects?.status?.status ?? result?.effects?.status;
+  if (status !== 'Success' && status !== 'success' && status?.status !== 'success') {
     console.error('Publish output did not report success directly; checking objectChanges...');
   }
 
-  const published = (result.objectChanges ?? []).find(
-    (c: { type: string }) => c.type === 'published',
+  const changes = result.objectChanges ?? result.changed_objects ?? [];
+  const published = changes.find(
+    (c: { type?: string; objectType?: string }) => c.type === 'published' || c.objectType === 'package',
   );
-  const registry = (result.objectChanges ?? []).find(
-    (c: { type: string; objectType?: string }) =>
-      c.type === 'created' && c.objectType?.endsWith('::registry::Registry'),
+  const registry = changes.find(
+    (c: { type?: string; objectType?: string }) =>
+      (c.type === undefined || c.type === 'created') && c.objectType?.endsWith('::registry::Registry'),
+  );
+  const upgradeCap = changes.find(
+    (c: { type?: string; objectType?: string }) =>
+      (c.type === undefined || c.type === 'created') && c.objectType?.endsWith('::package::UpgradeCap'),
   );
   if (!published || !registry) {
     console.error('Could not locate package/registry in publish output.');
+    process.exit(1);
+  }
+
+  const packageId = published.packageId ?? published.objectId;
+  if (!packageId) {
+    console.error('Could not locate published package id in publish output.');
     process.exit(1);
   }
 
@@ -65,15 +76,17 @@ function main() {
     ? JSON.parse(readFileSync(deploymentsPath, 'utf8'))
     : {};
   deployments[network] = {
-    policyPackageId: published.packageId,
+    policyPackageId: packageId,
     registryId: registry.objectId,
+    ...(upgradeCap ? { upgradeCapId: upgradeCap.objectId } : {}),
     publishedAt: new Date().toISOString(),
     publishDigest: result.digest,
   };
   writeFileSync(deploymentsPath, JSON.stringify(deployments, null, 2));
 
-  console.log(`package:  ${published.packageId}`);
+  console.log(`package:  ${packageId}`);
   console.log(`registry: ${registry.objectId}`);
+  if (upgradeCap) console.log(`upgradeCap: ${upgradeCap.objectId}`);
   console.log(`deployments.json updated.`);
 }
 

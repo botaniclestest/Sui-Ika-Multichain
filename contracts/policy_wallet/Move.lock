@@ -4,6 +4,42 @@
 [move]
 version = 4
 
+[pinned.mainnet.MoveStdlib]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "868c226359ef914f1f3b080518f27eb13d8967f5" }
+use_environment = "mainnet"
+manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
+deps = {}
+
+[pinned.mainnet.Sui]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "868c226359ef914f1f3b080518f27eb13d8967f5" }
+use_environment = "mainnet"
+manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
+deps = { MoveStdlib = "MoveStdlib" }
+
+[pinned.mainnet.ika]
+source = { local = "../vendor/mainnet/ika" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.ika_common]
+source = { local = "../vendor/mainnet/ika_common" }
+use_environment = "mainnet"
+manifest_digest = "D36CD1733678FE081C92B2A37E772A012C9364AC3DE03B3BBBD70ED2EE8E97A7"
+deps = { ika = "ika", std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.ika_dwallet_2pc_mpc]
+source = { local = "../vendor/mainnet/ika_dwallet_2pc_mpc" }
+use_environment = "mainnet"
+manifest_digest = "681106F043512193CEBA9D68DF32D51DD685ED0C13382F1F9F04505E1DAF0813"
+deps = { ika = "ika", ika_common = "ika_common", std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.policy_wallet]
+source = { root = true }
+use_environment = "mainnet"
+manifest_digest = "81E4090989B61AF6A588ECF3759D5F76353998791A3792AF42B4A0433C4E4745"
+deps = { ika = "ika", ika_dwallet_2pc_mpc = "ika_dwallet_2pc_mpc", std = "MoveStdlib", sui = "Sui" }
+
 [pinned.testnet.MoveStdlib]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "868c226359ef914f1f3b080518f27eb13d8967f5" }
 use_environment = "testnet"
