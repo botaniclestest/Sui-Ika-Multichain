@@ -167,6 +167,28 @@ body::before {
   animation: shell-fade-in var(--dur-slow) var(--ease) both;
 }
 
+.squid-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-position: right top;
+  background-repeat: no-repeat;
+  background-size: min(1180px, 92vw) auto;
+  opacity: 0.16;
+  filter: saturate(1.05) contrast(1.04);
+  mix-blend-mode: screen;
+}
+
+.squid-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, var(--bg) 0%, rgba(6, 8, 13, 0.78) 45%, rgba(6, 8, 13, 0.28) 100%),
+    linear-gradient(180deg, rgba(6, 8, 13, 0.04) 0%, var(--bg) 100%);
+}
+
 @keyframes shell-fade-in {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: none; }
@@ -209,13 +231,29 @@ header::after {
 .brand:hover { transform: translateY(-1px); }
 .brand:active { transform: translateY(0); }
 
+.brand-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 35% 18%, rgba(255, 255, 255, 0.26), transparent 28%),
+    linear-gradient(145deg, rgba(255, 95, 135, 0.30), rgba(32, 243, 166, 0.14));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 10px 26px rgba(255, 95, 135, 0.20),
+    0 0 24px rgba(32, 243, 166, 0.12);
+}
+
 .brand-glyph {
-  width: 32px;
-  height: 32px;
+  width: 31px;
+  height: 31px;
   display: inline-block;
-  border-radius: 11px;
   object-fit: contain;
-  filter: drop-shadow(0 8px 18px rgba(255, 95, 135, 0.34)) drop-shadow(0 0 14px rgba(32, 243, 166, 0.18));
+  transform: translateY(1px) rotate(-4deg);
+  filter: drop-shadow(0 6px 14px rgba(255, 95, 135, 0.28)) drop-shadow(0 0 10px rgba(32, 243, 166, 0.18));
 }
 
 .brand-text { color: var(--text-strong); }
@@ -754,6 +792,12 @@ tr.disabled { opacity: 0.5; }
   align-items: start;
 }
 @media (max-width: 720px) {
+  .squid-backdrop {
+    background-position: 65% top;
+    background-size: 980px auto;
+    opacity: 0.10;
+  }
+
   .send-layout { grid-template-columns: 1fr; }
   .coin-stage { display: none; }
 }

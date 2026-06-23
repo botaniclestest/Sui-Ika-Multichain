@@ -8,12 +8,12 @@ Last updated: 2026-06-23
 - Current branch is `main`.
 - GitHub remote is `git@github.com:botaniclestest/Sui-Ika-Multichain.git`.
 - Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends`.
-- This handoff records the subsequent testnet package upgrade, deployment metadata update, and Sui Vault direct-send warning cleanup.
+- This handoff records the subsequent testnet package upgrade, deployment metadata update, Sui Vault direct-send warning cleanup, and squid backdrop update.
 - Sui CLI active environment is currently `testnet`.
 - Local preview is running from rebuilt output at `http://localhost:4173/` and `http://192.168.68.76:4173/`.
 - Preview process details at handoff:
-  - wrapper PID `2908878`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
-  - Vite PID `2908898`: `vite preview --host 0.0.0.0`
+  - wrapper PID `2914251`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
+  - Vite PID `2914271`: `vite preview --host 0.0.0.0`
 
 ## What This Project Is
 
@@ -46,6 +46,7 @@ Last updated: 2026-06-23
   - The Sui Vault wallet object ID has an inline red flag: `DO NOT SEND DIRECTLY TO THIS ADDRESS. USE DEPOSIT TO VAULT FUNCTION BELOW.`
   - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
 - Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
+- Added uploaded `stINKy.jpg` as a low-opacity fixed squid backdrop and cleaned up the header squid logo presentation.
 
 ## Sui Vault Direct-Transfer Incident
 
@@ -57,6 +58,54 @@ Last updated: 2026-06-23
 - Current UI behavior: direct-send balances are hidden; the Sui Vault object ID row carries the do-not-send flag.
 - Future deposits should use the Overview `Deposit to Sui Vault` form with coin type, amount, and decimals.
 - Do not direct-send Sui coins to the wallet object ID unless a recovery/ingest path is explicitly implemented and tested.
+
+## Sui Vault Deposit Model
+
+- Sui Vault deposits do not go to a normal deposit address.
+- The app builds a Sui transaction that takes a coin from the connected signer wallet and calls `vault_deposit<T>(wallet, coin)`.
+- The contract converts that coin into `Balance<T>` and stores it inside the `PolicyWallet.vault` Bag keyed by coin type.
+- The wallet object ID is the shared policy object, not a safe recipient address for direct transfers.
+- For WAL deposits, the coin type field is the inner coin type:
+  - `0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL`
+- Do not use the metadata wrapper type:
+  - `0x2::coin::CoinMetadata<...>`
+
+## Token-Specific Limit Plan
+
+- Current contract limits are per chain: `fast_path_limit`, `per_tx_limit`, `window_limit`, `window_ms`, and `fee_limit` live on `ChainPolicy`.
+- This is too coarse for ERC-20/SPL/Sui Vault tokens because token base units and token values differ from native-chain units.
+- Preferred upgrade design: add per-asset policy overrides using dynamic fields attached to the wallet object ID, not new fields on `PolicyWallet` or `ChainPolicy`.
+- Reason: dynamic fields avoid changing existing shared-object struct layouts and should be safer for package upgrades.
+- Proposed Move design:
+  - Add `AssetPolicyKey { chain_key: vector<u8>, asset: vector<u8> }` and `AssetPolicy { fast_path_limit, per_tx_limit, window_limit, window_ms, spent_in_window, window_started_at_ms }`.
+  - Use `asset` bytes already stored in `SpendRequest`: EVM ERC-20 address bytes, Solana SPL mint bytes, Sui Vault coin type bytes, empty bytes for native if ever needed.
+  - Add admin proposal action `ACTION_SET_ASSET_LIMITS` with `bytes_param = asset` and `u_params = [fast, per_tx, window_limit, window_ms]`.
+  - Add optional `ACTION_REMOVE_ASSET_LIMITS` to fall back to chain-level limits.
+  - Creation validation uses asset override when present; otherwise chain-level limits.
+  - Fast-path checks and execution timelock use asset override when present.
+  - Rolling-window accounting should be per asset override when present, otherwise chain-level.
+- Proposed frontend design:
+  - Governance tab section: `Token / asset limits`.
+  - Pick chain, then pick a discovered asset from balances or paste asset bytes/coin type.
+  - Human amount inputs use selected asset decimals.
+  - Proposal cards decode asset limits with token symbol/coin type when known.
+  - Overview/Send policy copy should show token-specific limits when the selected asset has an override.
+- Required verification before testnet upgrade:
+  - Move tests for override create/reject, fast path, timelock, per-asset rolling window, removal/fallback.
+  - TypeScript tests for asset byte encoding for ERC-20, SPL mint, and Sui coin type.
+  - Testnet package upgrade and `deployments.json` update.
+
+## Transaction History Plan
+
+- Do not implement transaction history yet.
+- Best first version should be Sui-control-plane history sourced from on-chain events and request/proposal tables:
+  - wallet created, signer changes, policy/proposal actions, spend request created/voted/executed, vault deposits/withdrawals.
+  - link Sui transaction digests and request/proposal ids.
+- Target-chain broadcast history should be layered later:
+  - BTC txid from assembled/broadcast transaction.
+  - EVM tx hash from signed raw transaction broadcast.
+  - Solana signature from broadcast result.
+- Persisting target-chain tx ids probably needs either new events/state after broadcast or local/indexed recovery from request messages; design later.
 
 ## Testnet Deployment
 
@@ -118,6 +167,7 @@ Known non-blocking warnings:
 - `contracts/policy_wallet/tests/verify_tests.move`: Move verifier tests, including SPL cases.
 - `deployments.json`: deployment constants consumed by the web app.
 - `contracts/policy_wallet/Published.toml`: Move publication metadata for CLI upgrades.
+- `stINKy.jpg`: uploaded squid artwork used as the current web background.
 
 ## Useful Local Commands
 
@@ -140,6 +190,8 @@ Known non-blocking warnings:
   - EVM configured token dropdown entries when token balances exist.
   - Solana SPL token balance discovery.
   - Solana SPL spend request creation, vote, timelock, execute, and broadcast.
+- Implement token-specific spend limits via governance using dynamic-field asset policies.
+- Keep transaction history as a plan until token-limit work is settled.
 - Decide whether to expose reserve withdrawal governance (`ACTION_WITHDRAW_RESERVES`) in TypeScript/UI.
 - Before serious mainnet value: audit, UpgradeCap policy, low-limit burn-in, recovery drill from a clean machine, and live Ika support-config checks.
 

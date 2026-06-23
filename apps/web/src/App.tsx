@@ -7,6 +7,7 @@ import { useCore, useMyWallets } from './hooks';
 import { CreateWizard } from './components/CreateWizard';
 import { Dashboard } from './components/Dashboard';
 import stinkySquid from './assets/stinky-squid.svg';
+import stinkyBackdrop from '../../../stINKy.jpg';
 
 type View = { kind: 'list' } | { kind: 'create' } | { kind: 'wallet'; walletId: string };
 
@@ -32,9 +33,12 @@ export default function App() {
 
   return (
     <div className="shell">
+      <div className="squid-backdrop" style={{ backgroundImage: `url(${stinkyBackdrop})` }} aria-hidden="true" />
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
-          <img className="brand-glyph" src={stinkySquid} alt="" aria-hidden="true" />
+          <span className="brand-mark">
+            <img className="brand-glyph" src={stinkySquid} alt="" aria-hidden="true" />
+          </span>
           <span className="brand-text">
             stINKy<span className="accent">Multichain Policy Wallet</span>
           </span>
