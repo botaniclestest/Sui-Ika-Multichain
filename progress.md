@@ -12,8 +12,8 @@ Last updated: 2026-06-23
 - Sui CLI active environment is currently `testnet`.
 - Local preview is running from rebuilt output at `http://localhost:4173/` and `http://192.168.68.76:4173/`.
 - Preview process details at handoff:
-  - wrapper PID `2914969`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
-  - Vite PID `2914990`: `vite preview --host 0.0.0.0`
+  - wrapper PID `2915589`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
+  - Vite PID `2915603`: `vite preview --host 0.0.0.0`
 
 ## What This Project Is
 
@@ -46,7 +46,7 @@ Last updated: 2026-06-23
   - The Sui Vault wallet object ID has an inline red flag: `DO NOT SEND DIRECTLY TO THIS ADDRESS. USE DEPOSIT TO VAULT FUNCTION BELOW.`
   - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
 - Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
-- Added uploaded `stINKy.jpg` as a full-cover fixed squid backdrop behind the cards and cleaned up the header squid logo presentation.
+- Added uploaded `stINKy.jpg` as a full-viewport fixed squid backdrop behind the cards and cleaned up the header squid logo presentation.
 
 ## Sui Vault Direct-Transfer Incident
 

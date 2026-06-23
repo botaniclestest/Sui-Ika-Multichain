@@ -174,9 +174,9 @@ body::before {
   pointer-events: none;
   background-position: center center;
   background-repeat: no-repeat;
-  background-size: cover;
-  opacity: 0.92;
-  filter: saturate(1.08) contrast(1.04);
+  background-size: 100% 100%;
+  opacity: 1;
+  filter: saturate(1.05) contrast(1.02);
 }
 
 .squid-backdrop::after {
@@ -184,13 +184,8 @@ body::before {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(900px 600px at 48% 24%, rgba(6, 8, 13, 0.08), transparent 62%),
-    linear-gradient(180deg, rgba(6, 8, 13, 0.18) 0%, rgba(6, 8, 13, 0.48) 100%);
-}
-
-.shell > :not(.squid-backdrop) {
-  position: relative;
-  z-index: 1;
+    radial-gradient(900px 600px at 48% 24%, rgba(6, 8, 13, 0.04), transparent 62%),
+    linear-gradient(180deg, rgba(6, 8, 13, 0.08) 0%, rgba(6, 8, 13, 0.22) 100%);
 }
 
 @keyframes shell-fade-in {
@@ -797,8 +792,8 @@ tr.disabled { opacity: 0.5; }
 }
 @media (max-width: 720px) {
   .squid-backdrop {
-    background-position: 58% top;
-    opacity: 0.86;
+    background-position: center center;
+    opacity: 1;
   }
 
   .send-layout { grid-template-columns: 1fr; }

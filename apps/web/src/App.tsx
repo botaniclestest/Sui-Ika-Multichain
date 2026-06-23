@@ -32,8 +32,9 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
+    <>
       <div className="squid-backdrop" style={{ backgroundImage: `url(${stinkyBackdrop})` }} aria-hidden="true" />
+      <div className="shell">
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
           <span className="brand-mark">
@@ -132,7 +133,8 @@ export default function App() {
       {account && deployment && view.kind === 'wallet' && (
         <Dashboard core={core} walletId={view.walletId} onBack={() => setView({ kind: 'list' })} />
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
