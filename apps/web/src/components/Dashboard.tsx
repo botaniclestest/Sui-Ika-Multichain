@@ -94,6 +94,50 @@ function fmtDuration(ms: bigint): string {
   return `${rounded.toString()}h`;
 }
 
+function parseDecimals(value: string, fallback: number): number {
+  if (!value.trim()) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 36) {
+    throw new Error('decimals must be a whole number from 0 to 36');
+  }
+  return parsed;
+}
+
+function safeParseDecimals(value: string, fallback: number): number {
+  try {
+    return parseDecimals(value, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeSuiCoinType(coinType: string): string {
+  const parts = coinType.trim().split('::');
+  if (parts.length < 3 || !parts[0]) throw new Error('Sui coin type must look like 0x...::module::TYPE');
+  return `${normalizeSuiAddress(parts[0])}::${parts.slice(1).join('::')}`;
+}
+
+function suiCoinTypeBytes(coinType: string): Uint8Array {
+  const normalized = normalizeSuiCoinType(coinType);
+  const [addr, ...rest] = normalized.split('::');
+  return utf8(`${normalizeSuiAddress(addr).slice(2)}::${rest.join('::')}`);
+}
+
+function suiCoinTypeFromBytes(bytes: Uint8Array): string {
+  const raw = new TextDecoder().decode(bytes);
+  const [addr, ...rest] = raw.split('::');
+  if (!addr || rest.length < 2) return raw;
+  return `${normalizeSuiAddress(`0x${addr}`)}::${rest.join('::')}`;
+}
+
+function safeSuiCoinSymbol(coinType: string): string {
+  try {
+    return normalizeSuiCoinType(coinType).split('::').at(-1) ?? 'coin';
+  } catch {
+    return 'coin';
+  }
+}
+
 function fmtChainAmount(chainKey: string, amount: bigint): string {
   const descriptor = chainDescriptor(chainKey);
   const decimals = descriptor?.decimals ?? 0;
@@ -612,10 +656,18 @@ function SendTab({
   const [destination, setDestination] = useState('');
   const [amount, setAmount] = useState('');
   const [token, setToken] = useState('');
+  const [tokenDecimals, setTokenDecimals] = useState('18');
+  const [suiCoinType, setSuiCoinType] = useState('0x2::sui::SUI');
+  const [suiCoinDecimals, setSuiCoinDecimals] = useState('9');
   const [err, setErr] = useState<string | null>(null);
 
   const chain = data.state.chains.get(chainKey);
   const dec = chainDescriptor(chainKey)?.decimals ?? 9;
+  const selectedDecimals = chain?.kind === ChainKind.SuiVault
+    ? safeParseDecimals(suiCoinDecimals, 9)
+    : chain?.kind === ChainKind.Evm && token
+      ? safeParseDecimals(tokenDecimals, dec)
+      : dec;
   const destinationHint =
     chain?.kind === ChainKind.SuiVault
       ? '(0x Sui address)'
@@ -634,7 +686,12 @@ function SendTab({
     setErr(null);
     try {
       if (!chain || !core.ids) throw new Error('select a chain');
-      const amountBase = toBase(amount, dec);
+      const amountDecimals = chain.kind === ChainKind.SuiVault
+        ? parseDecimals(suiCoinDecimals, 9)
+        : chain.kind === ChainKind.Evm && token
+          ? parseDecimals(tokenDecimals, dec)
+          : dec;
+      const amountBase = toBase(amount, amountDecimals);
       if (chain.kind === ChainKind.Solana) {
         if (destination.startsWith('0x')) {
           throw new Error('Solana destination must be a base58 Solana address, not a 0x Sui/EVM address.');
@@ -646,10 +703,10 @@ function SendTab({
         }
       }
       if (chain.kind === ChainKind.SuiVault) {
-        const coinType = '0x2::sui::SUI';
+        const coinType = normalizeSuiCoinType(suiCoinType);
         const tx = buildCreateVaultSpendRequestTx(core.ids, walletId, {
           chainKey: utf8(chainKey),
-          coinTypeBytes: utf8(coinType.replace('0x2', '0000000000000000000000000000000000000000000000000000000000000002')),
+          coinTypeBytes: suiCoinTypeBytes(coinType),
           destination: hexToBytes(destination),
           amount: amountBase,
         });
@@ -700,20 +757,46 @@ function SendTab({
             />
           </label>
           <label>
-            Amount ({chainDescriptor(chainKey)?.symbol ?? 'units'})
+            Amount ({chain?.kind === ChainKind.SuiVault
+              ? safeSuiCoinSymbol(suiCoinType)
+              : chain?.kind === ChainKind.Evm && token
+                ? 'token'
+                : (chainDescriptor(chainKey)?.symbol ?? 'units')})
             <input value={amount} onChange={(e) => setAmount(e.target.value.trim())} />
           </label>
+          {chain?.kind === ChainKind.SuiVault && (
+            <>
+              <label>
+                Sui coin type
+                <input
+                  value={suiCoinType}
+                  onChange={(e) => setSuiCoinType(e.target.value.trim())}
+                  placeholder="0x2::sui::SUI"
+                />
+              </label>
+              <label>
+                Sui coin decimals
+                <input value={suiCoinDecimals} onChange={(e) => setSuiCoinDecimals(e.target.value.trim())} />
+              </label>
+            </>
+          )}
           {chain?.kind === ChainKind.Evm && (
             <label>
               ERC-20 token contract (leave empty for native)
               <input value={token} onChange={(e) => setToken(e.target.value.trim())} placeholder="0x... (optional)" />
             </label>
           )}
+          {chain?.kind === ChainKind.Evm && token && (
+            <label>
+              ERC-20 token decimals
+              <input value={tokenDecimals} onChange={(e) => setTokenDecimals(e.target.value.trim())} />
+            </label>
+          )}
           {chain && (
             <p className="muted">
-              policy: per-tx max {fmtUnits(chain.perTxLimit, dec)} · fast path&nbsp;
-              {fmtUnits(chain.fastPathLimit, dec)} (1 approval, no timelock) · window&nbsp;
-              {fmtUnits(effectiveWindowRemaining(chain), dec)} remaining
+              policy: per-tx max {fmtUnits(chain.perTxLimit, selectedDecimals)} · fast path&nbsp;
+              {fmtUnits(chain.fastPathLimit, selectedDecimals)} (1 approval, no timelock) · window&nbsp;
+              {fmtUnits(effectiveWindowRemaining(chain), selectedDecimals)} remaining
             </p>
           )}
           {status && <div className="progress-line">{status}</div>}
@@ -779,7 +862,7 @@ function RequestsTab({
 
     if (chain.kind === ChainKind.SuiVault) {
       // coin type bytes are the stored asset
-      const coinType = '0x' + new TextDecoder().decode(req.asset).replace(/^0+/, '0');
+      const coinType = suiCoinTypeFromBytes(req.asset);
       await exec(buildExecuteVaultSpendTx(core.ids, walletId, req.id, coinType), 'execute vault spend');
       return;
     }
@@ -871,7 +954,12 @@ function RequestCard({
 }) {
   const account = useCurrentAccount();
   const chain = data.state.chains.get(req.chainKey);
-  const dec = chainDescriptor(req.chainKey)?.decimals ?? 9;
+  const suiCoinType = chain?.kind === ChainKind.SuiVault ? suiCoinTypeFromBytes(req.asset) : '';
+  const requestSymbol = suiCoinType
+    ? (suiCoinType.split('::').at(-1) ?? 'coin')
+    : chainDescriptor(req.chainKey)?.symbol;
+  const dec = suiCoinType ? (suiCoinType === '0x2::sui::SUI' ? 9 : 0) : (chainDescriptor(req.chainKey)?.decimals ?? 9);
+  const destinationDisplay = chain ? displayChainBytes(data, req.chainKey, req.destination).value : bytesToHex(req.destination);
   const alreadyVoted =
     !!account &&
     (containsSuiAddress(req.approvals, account.address) ||
@@ -882,7 +970,11 @@ function RequestCard({
     if (!chain) return { ok: false, errors: ['unknown chain'], summary: '' };
     try {
       if (chain.kind === ChainKind.SuiVault) {
-        return { ok: true, errors: [], summary: `Vault transfer of ${fmtUnits(req.amount, 9)} to 0x${bytesToHex(req.destination)}` };
+        return {
+          ok: true,
+          errors: [],
+          summary: `Vault transfer of ${fmtUnits(req.amount, dec)} ${requestSymbol ?? 'coin'} to ${destinationDisplay}${suiCoinType ? ` (${suiCoinType})` : ''}`,
+        };
       }
       if (!req.verifiedIntent) {
         return { ok: false, errors: ['UNVERIFIED payload - review bytes manually'], summary: describeUnverifiedPayload(req.messages[0] ?? new Uint8Array()) };
@@ -922,10 +1014,13 @@ function RequestCard({
     } catch (e) {
       return { ok: false, errors: [(e as Error).message], summary: '' };
     }
-  }, [chain, data, req]);
+  }, [chain, data, dec, destinationDisplay, req, requestSymbol, suiCoinType]);
 
   const required = Number(data.state.threshold);
   const reached = req.thresholdReachedAtMs > 0n;
+  const executableAt = reached ? Number(req.thresholdReachedAtMs + data.state.timelockSpendMs) : null;
+  const executableNow = !!executableAt && Date.now() >= executableAt;
+  const remainingMs = executableAt ? BigInt(Math.max(0, executableAt - Date.now())) : 0n;
   const decoded = (() => {
     if (chain?.kind === ChainKind.Evm && req.messages[0]) {
       try {
@@ -943,12 +1038,13 @@ function RequestCard({
       <div className="row spread">
         <strong>
           #{req.id.toString()} {req.chainKey} · {fmtUnits(req.amount, dec)}{' '}
-          {chainDescriptor(req.chainKey)?.symbol}
+          {requestSymbol}
           <span className="badge chain">{chainDescriptor(req.chainKey)?.displayName ?? req.chainKey}</span>
         </strong>
         <span className={`badge ${req.status === 0 ? '' : 'ok'}`}>{STATUS_LABEL[req.status]}</span>
       </div>
-      <div className="mono small">to {bytesToHex(req.destination, chain?.kind === ChainKind.Evm)}</div>
+      <div className="mono small">to {destinationDisplay}</div>
+      {suiCoinType && <div className="mono small muted">coin {suiCoinType}</div>}
       {decoded && <div className="muted small">{decoded}</div>}
       <div className={intentCheck.ok ? 'ok small' : 'error small'}>
         {intentCheck.ok ? `verified: ${intentCheck.summary}` : `CHECK FAILED: ${intentCheck.errors.join('; ')}`}
@@ -957,6 +1053,12 @@ function RequestCard({
         approvals {req.approvals.length}/{required} · rejections {req.rejections.length} ·{' '}
         {reached ? 'threshold reached' : 'collecting votes'} · creator {req.creator.slice(0, 8)}...
       </div>
+      <p className="muted small">
+        Spend timelock: {fmtDuration(data.state.timelockSpendMs)}.{' '}
+        {reached && executableAt
+          ? `Executable after ${new Date(executableAt).toLocaleString()}${executableNow ? '' : ` (${fmtDuration(remainingMs)} remaining)`}.`
+          : 'Starts after the spend threshold is reached.'}
+      </p>
       {isSigner && req.status === RequestStatus.Pending && (
         <div className="row">
           {!alreadyVoted && (
@@ -969,7 +1071,10 @@ function RequestCard({
               </button>
             </>
           )}
-          {reached && (
+          {reached && !executableNow && executableAt && (
+            <span className="muted small">Waiting on spend timelock until {new Date(executableAt).toLocaleString()}.</span>
+          )}
+          {reached && executableNow && (
             <button className="primary" onClick={() => void onExecute()}>
               execute + broadcast
             </button>
