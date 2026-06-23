@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="stINKy squid">
+  <defs>
+    <radialGradient id="body" cx="34%" cy="22%" r="74%">
+      <stop offset="0" stop-color="#ff9caa"/>
+      <stop offset="0.48" stop-color="#ff5f87"/>
+      <stop offset="1" stop-color="#6e235f"/>
+    </radialGradient>
+    <linearGradient id="mint" x1="0" x2="1" y1="1" y2="0">
+      <stop offset="0" stop-color="#b7ffc8"/>
+      <stop offset="1" stop-color="#29f0b4"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <circle cx="47" cy="49" r="8" fill="url(#mint)" opacity="0.42" filter="url(#glow)"/>
+  <circle cx="36" cy="54" r="6" fill="url(#mint)" opacity="0.34"/>
+  <path fill="url(#body)" stroke="#ffc0c8" stroke-width="1.4" stroke-linejoin="round" d="M42.8 8.5c9.8 4.1 13.9 15.2 9.2 24.9-4.6 9.7-16.2 15.1-27 12.5C14.2 43.4 9.8 32.2 15.1 22.4 20.4 12.6 33 4.3 42.8 8.5Z"/>
+  <path fill="none" stroke="#ff6d8f" stroke-width="5.2" stroke-linecap="round" d="M25 42c-7 5.8-14.2 7.5-19.8 4.2"/>
+  <path fill="none" stroke="#7d2b6b" stroke-width="3" stroke-linecap="round" d="M24.5 43.2c-4.8 5.2-6.6 9.9-4.8 14"/>
+  <path fill="none" stroke="#ff7c98" stroke-width="4.4" stroke-linecap="round" d="M34 45c-2.2 5-2.5 9.2-.6 12.5"/>
+  <path fill="none" stroke="#6e235f" stroke-width="3" stroke-linecap="round" d="M42 43.5c2.3 4.1 2 8.3-1 12.7"/>
+  <ellipse cx="34.2" cy="26.2" rx="6.4" ry="8.8" fill="#fff9f5" transform="rotate(-11 34.2 26.2)"/>
+  <ellipse cx="47.1" cy="27.3" rx="5.9" ry="8.1" fill="#fff9f5" transform="rotate(-12 47.1 27.3)"/>
+  <ellipse cx="36.4" cy="25.9" rx="2.4" ry="5.8" fill="#171019"/>
+  <ellipse cx="49" cy="27" rx="2.2" ry="5.2" fill="#171019"/>
+  <circle cx="38.2" cy="20.7" r="1.3" fill="#fff"/>
+  <circle cx="50.7" cy="22.5" r="1.2" fill="#fff"/>
+  <path fill="none" stroke="#4b173f" stroke-width="1.6" stroke-linecap="round" d="M27.5 36.8c2 2 4.9 2.2 7.2.7"/>
+</svg>

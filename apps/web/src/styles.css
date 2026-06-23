@@ -17,7 +17,7 @@
   /* lines */
   --border: rgba(255, 255, 255, 0.06);
   --border-strong: rgba(255, 255, 255, 0.12);
-  --border-accent: rgba(124, 92, 255, 0.45);
+  --border-accent: rgba(255, 95, 135, 0.45);
 
   /* text */
   --text: #e8edf6;
@@ -34,21 +34,21 @@
   --warn-soft: rgba(240, 180, 41, 0.14);
 
   /* accent gradient */
-  --accent: #7c5cff;
-  --accent-2: #4ca3ff;
-  --accent-3: #14f195;
-  --accent-grad: linear-gradient(135deg, #7c5cff 0%, #4ca3ff 50%, #14f195 100%);
+  --accent: #ff5f87;
+  --accent-2: #b7ffca;
+  --accent-3: #20f3a6;
+  --accent-grad: linear-gradient(135deg, #ff5f87 0%, #ff9cad 42%, #20f3a6 100%);
   --accent-grad-soft: linear-gradient(
     135deg,
-    rgba(124, 92, 255, 0.18),
-    rgba(76, 163, 255, 0.18),
-    rgba(20, 241, 149, 0.18)
+    rgba(255, 95, 135, 0.18),
+    rgba(255, 156, 173, 0.18),
+    rgba(32, 243, 166, 0.18)
   );
 
   /* chain defaults (overridden per data-chain) */
-  --chain-color: #7c5cff;
-  --chain-glow-1: rgba(124, 92, 255, 0.22);
-  --chain-glow-2: rgba(20, 241, 149, 0.18);
+  --chain-color: #ff5f87;
+  --chain-glow-1: rgba(255, 95, 135, 0.22);
+  --chain-glow-2: rgba(32, 243, 166, 0.18);
   --chain-grad: var(--accent-grad);
 
   /* radii */
@@ -67,7 +67,7 @@
   /* shadows */
   --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 48px rgba(0, 0, 0, 0.45);
-  --shadow-glow: 0 0 0 1px rgba(124, 92, 255, 0.35), 0 12px 40px rgba(124, 92, 255, 0.18);
+  --shadow-glow: 0 0 0 1px rgba(255, 95, 135, 0.35), 0 12px 40px rgba(32, 243, 166, 0.18);
 
   /* type */
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -79,17 +79,17 @@
 @property --chain-color {
   syntax: '<color>';
   inherits: true;
-  initial-value: #7c5cff;
+  initial-value: #ff5f87;
 }
 @property --chain-glow-1 {
   syntax: '<color>';
   inherits: true;
-  initial-value: rgba(124, 92, 255, 0.22);
+  initial-value: rgba(255, 95, 135, 0.22);
 }
 @property --chain-glow-2 {
   syntax: '<color>';
   inherits: true;
-  initial-value: rgba(20, 241, 149, 0.18);
+  initial-value: rgba(32, 243, 166, 0.18);
 }
 
 * { box-sizing: border-box; }
@@ -107,15 +107,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 
   background:
-    radial-gradient(1200px 700px at 10% -10%, rgba(124, 92, 255, 0.10), transparent 60%),
-    radial-gradient(1000px 600px at 110% 10%, rgba(20, 241, 149, 0.06), transparent 60%),
-    radial-gradient(900px 500px at 50% 110%, rgba(76, 163, 255, 0.07), transparent 60%),
+    radial-gradient(1200px 700px at 10% -10%, rgba(255, 95, 135, 0.11), transparent 60%),
+    radial-gradient(1000px 600px at 110% 10%, rgba(32, 243, 166, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 50% 110%, rgba(255, 156, 173, 0.08), transparent 60%),
     var(--bg);
   background-attachment: fixed;
   min-height: 100%;
 }
 
-::selection { background: rgba(124, 92, 255, 0.35); color: #fff; }
+::selection { background: rgba(255, 95, 135, 0.35); color: #fff; }
 
 /* Slim custom scrollbar */
 * { scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
@@ -162,8 +162,8 @@ header::after {
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(124, 92, 255, 0.35) 30%,
-    rgba(20, 241, 149, 0.25) 70%,
+    rgba(255, 95, 135, 0.35) 30%,
+    rgba(32, 243, 166, 0.25) 70%,
     transparent 100%
   );
 }
@@ -183,14 +183,12 @@ header::after {
 .brand:active { transform: translateY(0); }
 
 .brand-glyph {
-  width: 26px; height: 26px;
-  display: inline-grid; place-items: center;
-  border-radius: 8px;
-  background: var(--accent-grad);
-  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  color: #0b0f17;
-  font-weight: 800;
-  font-size: 14px;
+  width: 32px;
+  height: 32px;
+  display: inline-block;
+  border-radius: 11px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 18px rgba(255, 95, 135, 0.34)) drop-shadow(0 0 14px rgba(32, 243, 166, 0.18));
 }
 
 .brand-text { color: var(--text-strong); }
@@ -278,7 +276,7 @@ button:hover:not(:disabled) {
 button:active:not(:disabled) { transform: translateY(0) scale(0.985); }
 button:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.35);
+  box-shadow: 0 0 0 3px rgba(255, 95, 135, 0.35);
 }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -289,12 +287,12 @@ button.primary {
   border-color: transparent;
   color: #0b0f17;
   font-weight: 600;
-  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: 0 6px 18px rgba(255, 95, 135, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 button.primary:hover:not(:disabled) {
   background-position: 100% 50%;
   transform: translateY(-1px);
-  box-shadow: 0 10px 28px rgba(76, 163, 255, 0.40), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: 0 10px 28px rgba(32, 243, 166, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 button.primary:disabled {
   background: var(--surface-2);
@@ -365,7 +363,7 @@ input, select {
 input:hover, select:hover { border-color: rgba(255, 255, 255, 0.18); }
 input:focus, select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.25);
+  box-shadow: 0 0 0 3px rgba(255, 95, 135, 0.25);
   background: var(--surface-1);
 }
 input::placeholder { color: var(--dim); }
@@ -616,7 +614,7 @@ tr.disabled { opacity: 0.5; }
   border-color: var(--border-accent);
   background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
   color: var(--text);
-  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.15);
+  box-shadow: 0 6px 18px rgba(255, 95, 135, 0.15);
 }
 .step-track .step.active .num {
   background: var(--accent-grad);
@@ -957,10 +955,10 @@ tr.disabled { opacity: 0.5; }
   align-items: center;
   border-radius: var(--r-md);
   overflow: visible;
-  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.25);
+  box-shadow: 0 6px 18px rgba(255, 95, 135, 0.25);
   transition: box-shadow var(--dur-base) var(--ease), transform var(--dur-base) var(--ease);
 }
-.connect-slot:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(76, 163, 255, 0.35); }
+.connect-slot:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(32, 243, 166, 0.28); }
 
 [data-radix-popper-content-wrapper],
 [role='dialog'],

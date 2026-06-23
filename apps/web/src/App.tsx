@@ -6,6 +6,7 @@ import { getDeployment, setDeploymentOverride } from './config';
 import { useCore, useMyWallets } from './hooks';
 import { CreateWizard } from './components/CreateWizard';
 import { Dashboard } from './components/Dashboard';
+import stinkySquid from './assets/stinky-squid.svg';
 
 type View = { kind: 'list' } | { kind: 'create' } | { kind: 'wallet'; walletId: string };
 
@@ -33,7 +34,7 @@ export default function App() {
     <div className="shell">
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
-          <span className="brand-glyph" aria-hidden="true">s</span>
+          <img className="brand-glyph" src={stinkySquid} alt="" aria-hidden="true" />
           <span className="brand-text">
             stINKy<span className="accent">Multichain Policy Wallet</span>
           </span>
