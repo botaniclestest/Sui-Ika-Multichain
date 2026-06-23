@@ -165,3 +165,17 @@ export async function fetchEvmNativeBalance(rpcUrl: string, address: string): Pr
   const provider = evmProvider(rpcUrl);
   return provider.getBalance(address);
 }
+
+export async function fetchErc20Balance(
+  rpcUrl: string,
+  token: string,
+  owner: string,
+): Promise<bigint> {
+  const provider = evmProvider(rpcUrl);
+  const ownerWord = getAddress(owner).slice(2).toLowerCase().padStart(64, '0');
+  const result = await provider.call({
+    to: getAddress(token),
+    data: `0x70a08231${ownerWord}`,
+  });
+  return BigInt(result);
+}

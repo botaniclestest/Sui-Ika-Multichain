@@ -497,6 +497,65 @@ fun sysvar_recent_blockhashes(): vector<u8> {
     x"06a7d517192c568ee08a845f73d29788cf035c3145b21ab344d8062ea9400000"
 }
 
+fun spl_token_program(): vector<u8> {
+    x"06ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a9"
+}
+
+fun associated_token_program(): vector<u8> {
+    x"8c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f859"
+}
+
+fun sol_mint(): vector<u8> { repeat(0xDD, 32) }
+
+/// accounts: [own, nonce, sysvar, ata, owner/dest, mint, system, token, ata_program, source_token]
+fun build_sol_spl_transfer(amount: u64, mint: vector<u8>, owner: vector<u8>): vector<u8> {
+    let mut m = vector[1u8, 0, 6];
+    m.push_back(10);
+    m.append(sol_own());
+    m.append(repeat(0xCD, 32)); // nonce account
+    m.append(sysvar_recent_blockhashes());
+    m.append(repeat(0xAC, 32)); // recipient ATA
+    m.append(owner);
+    m.append(mint);
+    m.append(repeat(0x00, 32)); // system program
+    m.append(spl_token_program());
+    m.append(associated_token_program());
+    m.append(repeat(0x99, 32)); // source token account
+    m.append(repeat(0xEE, 32)); // nonce value in blockhash slot
+    m.push_back(3);
+    // ix0: nonce advance
+    m.push_back(6); // system program
+    m.push_back(3);
+    m.push_back(1); // nonce
+    m.push_back(2); // sysvar
+    m.push_back(0); // authority
+    m.push_back(4);
+    m.append(u32_le(4));
+    // ix1: create associated token account idempotently
+    m.push_back(8); // associated token program
+    m.push_back(6);
+    m.push_back(0); // payer
+    m.push_back(3); // ata
+    m.push_back(4); // owner
+    m.push_back(5); // mint
+    m.push_back(6); // system
+    m.push_back(7); // token program
+    m.push_back(1); // data len
+    m.push_back(1); // CreateIdempotent
+    // ix2: SPL Token transferChecked(source, mint, ata, owner)
+    m.push_back(7); // token program
+    m.push_back(4);
+    m.push_back(9); // source token account
+    m.push_back(5); // mint
+    m.push_back(3); // destination ATA
+    m.push_back(0); // owner authority
+    m.push_back(10); // data len
+    m.push_back(12); // TransferChecked
+    m.append(u64_le(amount));
+    m.push_back(6); // decimals
+    m
+}
+
 /// accounts: [own(signer), dest, nonce, sysvar, system]
 /// ix0: nonceAdvance(nonce=2, sysvar=3, auth=0); ix1: transfer(0 -> 1)
 fun build_sol_durable_transfer(
@@ -616,4 +675,34 @@ fun sol_durable_rejects_fake_sysvar() {
     m.append(u32_le(2));
     m.append(u64_le(50_000_000));
     verify_solana::verify(&m, &sol_own(), &sol_dest(), 50_000_000);
+}
+
+// === Solana SPL token tests ===
+
+#[test]
+fun sol_valid_spl_transfer_checked() {
+    let mint = sol_mint();
+    let msg = build_sol_spl_transfer(1_500_000, mint, sol_dest());
+    verify_solana::verify_with_asset(&msg, &sol_own(), &sol_mint(), &sol_dest(), 1_500_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EBadSplTransfer)]
+fun sol_spl_rejects_wrong_mint() {
+    let msg = build_sol_spl_transfer(1_500_000, sol_mint(), sol_dest());
+    verify_solana::verify_with_asset(&msg, &sol_own(), &repeat(0xAB, 32), &sol_dest(), 1_500_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EDestinationMismatch)]
+fun sol_spl_rejects_wrong_owner_destination() {
+    let msg = build_sol_spl_transfer(1_500_000, sol_mint(), repeat(0xBA, 32));
+    verify_solana::verify_with_asset(&msg, &sol_own(), &sol_mint(), &sol_dest(), 1_500_000);
+}
+
+#[test]
+#[expected_failure(abort_code = verify_solana::EAmountMismatch)]
+fun sol_spl_rejects_wrong_amount() {
+    let msg = build_sol_spl_transfer(1_500_001, sol_mint(), sol_dest());
+    verify_solana::verify_with_asset(&msg, &sol_own(), &sol_mint(), &sol_dest(), 1_500_000);
 }

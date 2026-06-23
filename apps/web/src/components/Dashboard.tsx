@@ -94,21 +94,18 @@ function fmtDuration(ms: bigint): string {
   return `${rounded.toString()}h`;
 }
 
-function parseDecimals(value: string, fallback: number): number {
-  if (!value.trim()) return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 36) {
-    throw new Error('decimals must be a whole number from 0 to 36');
-  }
-  return parsed;
+function balanceKey(row: ChainBalanceRow): string {
+  return `${row.assetKind}:${row.assetId}:${row.tokenAccount ?? ''}`;
 }
 
-function safeParseDecimals(value: string, fallback: number): number {
-  try {
-    return parseDecimals(value, fallback);
-  } catch {
-    return fallback;
-  }
+function assetLabel(row: ChainBalanceRow): string {
+  const balance = row.amount === null ? 'unknown' : `${fmtUnits(row.amount, row.decimals)} ${row.symbol}`;
+  if (row.assetKind === 'native') return `${row.symbol} native - ${balance}`;
+  return `${row.symbol} - ${balance}`;
+}
+
+function shortAssetId(value: string): string {
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
 function normalizeSuiCoinType(coinType: string): string {
@@ -128,14 +125,6 @@ function suiCoinTypeFromBytes(bytes: Uint8Array): string {
   const [addr, ...rest] = raw.split('::');
   if (!addr || rest.length < 2) return raw;
   return `${normalizeSuiAddress(`0x${addr}`)}::${rest.join('::')}`;
-}
-
-function safeSuiCoinSymbol(coinType: string): string {
-  try {
-    return normalizeSuiCoinType(coinType).split('::').at(-1) ?? 'coin';
-  } catch {
-    return 'coin';
-  }
 }
 
 function fmtChainAmount(chainKey: string, amount: bigint): string {
@@ -325,7 +314,14 @@ export function Dashboard({
 
       {tab === 'overview' && <Overview core={core} walletId={walletId} data={data} balances={balanceState} act={act} />}
       {tab === 'send' && (
-        <SendTab core={core} walletId={walletId} data={data} isSigner={isSigner} onSubmitted={refresh} />
+        <SendTab
+          core={core}
+          walletId={walletId}
+          data={data}
+          balances={balanceState}
+          isSigner={isSigner}
+          onSubmitted={refresh}
+        />
       )}
       {tab === 'requests' && (
         <RequestsTab core={core} walletId={walletId} data={data} isSigner={isSigner} act={act} />
@@ -407,9 +403,12 @@ function Overview({
             </thead>
             <tbody>
               {balances.balances.map((row) => (
-                <tr key={`${row.chainKey}:${row.assetId}`}>
+                <tr key={`${row.chainKey}:${balanceKey(row)}`}>
                   <td>{row.chainKey}</td>
-                  <td>{row.assetId ? row.symbol : chainDescriptor(row.chainKey)?.symbol ?? row.symbol}</td>
+                  <td>
+                    {row.assetId ? row.label : chainDescriptor(row.chainKey)?.symbol ?? row.symbol}
+                    {row.assetId && <div className="mono small muted">{row.assetId}</div>}
+                  </td>
                   <td>{fmtBalance(row)}</td>
                   <td className={row.status === 'ok' ? 'ok' : row.status === 'error' ? 'error' : 'muted'}>
                     {row.status === 'ok' ? row.source : row.error ?? row.status}
@@ -640,12 +639,14 @@ function SendTab({
   core,
   walletId,
   data,
+  balances,
   isSigner,
   onSubmitted,
 }: {
   core: CoreCtx;
   walletId: string;
   data: RecoveredWallet;
+  balances: BalanceState;
   isSigner: boolean;
   onSubmitted: () => Promise<void>;
 }) {
@@ -653,21 +654,18 @@ function SendTab({
   const { createSpend, busy, status } = useCreateSpend(core);
   const chains = [...data.state.chains.values()].filter((c) => c.enabled);
   const [chainKey, setChainKey] = useState(chains[0]?.chainKey ?? '');
+  const [assetKey, setAssetKey] = useState('');
   const [destination, setDestination] = useState('');
   const [amount, setAmount] = useState('');
-  const [token, setToken] = useState('');
-  const [tokenDecimals, setTokenDecimals] = useState('18');
-  const [suiCoinType, setSuiCoinType] = useState('0x2::sui::SUI');
-  const [suiCoinDecimals, setSuiCoinDecimals] = useState('9');
   const [err, setErr] = useState<string | null>(null);
 
   const chain = data.state.chains.get(chainKey);
-  const dec = chainDescriptor(chainKey)?.decimals ?? 9;
-  const selectedDecimals = chain?.kind === ChainKind.SuiVault
-    ? safeParseDecimals(suiCoinDecimals, 9)
-    : chain?.kind === ChainKind.Evm && token
-      ? safeParseDecimals(tokenDecimals, dec)
-      : dec;
+  const assetOptions = (balances.balances ?? []).filter(
+    (row) => row.chainKey === chainKey && row.status === 'ok' && row.amount !== null,
+  );
+  const selectedAsset = assetOptions.find((row) => balanceKey(row) === assetKey) ?? assetOptions[0] ?? null;
+  const selectedDecimals = selectedAsset?.decimals ?? chainDescriptor(chainKey)?.decimals ?? 9;
+  const selectedSymbol = selectedAsset?.symbol ?? chainDescriptor(chainKey)?.symbol ?? 'units';
   const destinationHint =
     chain?.kind === ChainKind.SuiVault
       ? '(0x Sui address)'
@@ -686,12 +684,11 @@ function SendTab({
     setErr(null);
     try {
       if (!chain || !core.ids) throw new Error('select a chain');
-      const amountDecimals = chain.kind === ChainKind.SuiVault
-        ? parseDecimals(suiCoinDecimals, 9)
-        : chain.kind === ChainKind.Evm && token
-          ? parseDecimals(tokenDecimals, dec)
-          : dec;
-      const amountBase = toBase(amount, amountDecimals);
+      if (!selectedAsset) throw new Error('select an asset with a loaded balance');
+      const amountBase = toBase(amount, selectedAsset.decimals);
+      if (selectedAsset.amount !== null && amountBase > selectedAsset.amount) {
+        throw new Error(`insufficient ${selectedAsset.symbol}: balance is ${fmtUnits(selectedAsset.amount, selectedAsset.decimals)}`);
+      }
       if (chain.kind === ChainKind.Solana) {
         if (destination.startsWith('0x')) {
           throw new Error('Solana destination must be a base58 Solana address, not a 0x Sui/EVM address.');
@@ -703,7 +700,7 @@ function SendTab({
         }
       }
       if (chain.kind === ChainKind.SuiVault) {
-        const coinType = normalizeSuiCoinType(suiCoinType);
+        const coinType = normalizeSuiCoinType(selectedAsset.assetId);
         const tx = buildCreateVaultSpendRequestTx(core.ids, walletId, {
           chainKey: utf8(chainKey),
           coinTypeBytes: suiCoinTypeBytes(coinType),
@@ -716,7 +713,9 @@ function SendTab({
           chainKey,
           destination,
           amountBaseUnits: amountBase,
-          tokenAddress: token || undefined,
+          tokenAddress: selectedAsset.assetKind === 'token' ? selectedAsset.assetId : undefined,
+          tokenDecimals: selectedAsset.assetKind === 'token' ? selectedAsset.decimals : undefined,
+          solanaSourceTokenAccount: selectedAsset.tokenAccount,
         });
       }
       setDestination('');
@@ -740,7 +739,13 @@ function SendTab({
         <div className="form">
           <label>
             Chain
-            <select value={chainKey} onChange={(e) => setChainKey(e.target.value)}>
+            <select
+              value={chainKey}
+              onChange={(e) => {
+                setChainKey(e.target.value);
+                setAssetKey('');
+              }}
+            >
               {chains.map((c) => (
                 <option key={c.chainKey} value={c.chainKey}>
                   {chainDescriptor(c.chainKey)?.displayName ?? c.chainKey}
@@ -748,6 +753,23 @@ function SendTab({
               ))}
             </select>
           </label>
+          <label>
+            Asset
+            <select value={selectedAsset ? balanceKey(selectedAsset) : ''} onChange={(e) => setAssetKey(e.target.value)}>
+              {assetOptions.length === 0 && <option value="">{balances.loading ? 'loading balances...' : 'no spendable balance found'}</option>}
+              {assetOptions.map((row) => (
+                <option key={balanceKey(row)} value={balanceKey(row)}>
+                  {assetLabel(row)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedAsset && (
+            <p className="muted small">
+              Available: {fmtUnits(selectedAsset.amount ?? 0n, selectedAsset.decimals)} {selectedAsset.symbol}
+              {selectedAsset.assetId && <span className="mono"> · {selectedAsset.assetId}</span>}
+            </p>
+          )}
           <label>
             Destination {destinationHint}
             <input
@@ -757,41 +779,9 @@ function SendTab({
             />
           </label>
           <label>
-            Amount ({chain?.kind === ChainKind.SuiVault
-              ? safeSuiCoinSymbol(suiCoinType)
-              : chain?.kind === ChainKind.Evm && token
-                ? 'token'
-                : (chainDescriptor(chainKey)?.symbol ?? 'units')})
+            Amount ({selectedSymbol})
             <input value={amount} onChange={(e) => setAmount(e.target.value.trim())} />
           </label>
-          {chain?.kind === ChainKind.SuiVault && (
-            <>
-              <label>
-                Sui coin type
-                <input
-                  value={suiCoinType}
-                  onChange={(e) => setSuiCoinType(e.target.value.trim())}
-                  placeholder="0x2::sui::SUI"
-                />
-              </label>
-              <label>
-                Sui coin decimals
-                <input value={suiCoinDecimals} onChange={(e) => setSuiCoinDecimals(e.target.value.trim())} />
-              </label>
-            </>
-          )}
-          {chain?.kind === ChainKind.Evm && (
-            <label>
-              ERC-20 token contract (leave empty for native)
-              <input value={token} onChange={(e) => setToken(e.target.value.trim())} placeholder="0x... (optional)" />
-            </label>
-          )}
-          {chain?.kind === ChainKind.Evm && token && (
-            <label>
-              ERC-20 token decimals
-              <input value={tokenDecimals} onChange={(e) => setTokenDecimals(e.target.value.trim())} />
-            </label>
-          )}
           {chain && (
             <p className="muted">
               policy: per-tx max {fmtUnits(chain.perTxLimit, selectedDecimals)} · fast path&nbsp;
@@ -801,7 +791,7 @@ function SendTab({
           )}
           {status && <div className="progress-line">{status}</div>}
           {err && <div className="error">{err}</div>}
-          <button className="primary" onClick={() => void submit()} disabled={busy || !destination || !amount}>
+          <button className="primary" onClick={() => void submit()} disabled={busy || !destination || !amount || !selectedAsset}>
             {busy ? 'preparing...' : 'create spend request'}
           </button>
         </div>
@@ -955,10 +945,13 @@ function RequestCard({
   const account = useCurrentAccount();
   const chain = data.state.chains.get(req.chainKey);
   const suiCoinType = chain?.kind === ChainKind.SuiVault ? suiCoinTypeFromBytes(req.asset) : '';
+  const tokenRequest = !!chain && chain.kind !== ChainKind.SuiVault && req.asset.length > 0;
   const requestSymbol = suiCoinType
     ? (suiCoinType.split('::').at(-1) ?? 'coin')
+    : tokenRequest
+      ? (chain.kind === ChainKind.Solana ? `SPL ${shortAssetId(bytesToHex(req.asset))}` : 'token base units')
     : chainDescriptor(req.chainKey)?.symbol;
-  const dec = suiCoinType ? (suiCoinType === '0x2::sui::SUI' ? 9 : 0) : (chainDescriptor(req.chainKey)?.decimals ?? 9);
+  const dec = suiCoinType ? (suiCoinType === '0x2::sui::SUI' ? 9 : 0) : tokenRequest ? 0 : (chainDescriptor(req.chainKey)?.decimals ?? 9);
   const destinationDisplay = chain ? displayChainBytes(data, req.chainKey, req.destination).value : bytesToHex(req.destination);
   const alreadyVoted =
     !!account &&
@@ -1006,6 +999,7 @@ function RequestCard({
         return checkSolIntent({
           message: req.messages[0],
           ownPubkey: own,
+          asset: req.asset,
           destination: req.destination,
           amount: req.amount,
         });
@@ -1045,6 +1039,7 @@ function RequestCard({
       </div>
       <div className="mono small">to {destinationDisplay}</div>
       {suiCoinType && <div className="mono small muted">coin {suiCoinType}</div>}
+      {tokenRequest && <div className="mono small muted">asset {bytesToHex(req.asset)}</div>}
       {decoded && <div className="muted small">{decoded}</div>}
       <div className={intentCheck.ok ? 'ok small' : 'error small'}>
         {intentCheck.ok ? `verified: ${intentCheck.summary}` : `CHECK FAILED: ${intentCheck.errors.join('; ')}`}

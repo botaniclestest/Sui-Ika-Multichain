@@ -9,6 +9,14 @@
 
 export type SuiNetwork = 'testnet' | 'mainnet';
 
+export interface KnownEvmToken {
+  chainKey: string;
+  address: string;
+  symbol: string;
+  decimals: number;
+  name?: string;
+}
+
 export interface MythosNetworkConfig {
   network: SuiNetwork;
   suiRpcUrl: string;
@@ -19,6 +27,7 @@ export interface MythosNetworkConfig {
   /** Target chain endpoints (public defaults; all replaceable). */
   btcEsploraUrl: string;
   evmRpcUrls: Record<string, string>; // chainKey -> rpc
+  evmTokens?: KnownEvmToken[];
   solanaRpcUrl: string;
 }
 
@@ -38,6 +47,7 @@ export const DEFAULT_CONFIGS: Record<SuiNetwork, MythosNetworkConfig> = {
       'eip155:11155111': 'https://ethereum-sepolia-rpc.publicnode.com',
       'eip155:84532': 'https://sepolia.base.org',
     },
+    evmTokens: [],
     solanaRpcUrl: 'https://api.devnet.solana.com',
   },
   mainnet: {
@@ -52,6 +62,12 @@ export const DEFAULT_CONFIGS: Record<SuiNetwork, MythosNetworkConfig> = {
       'eip155:42161': 'https://arb1.arbitrum.io/rpc',
       'eip155:10': 'https://mainnet.optimism.io',
     },
+    evmTokens: [
+      { chainKey: 'eip155:1', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+      { chainKey: 'eip155:8453', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+      { chainKey: 'eip155:42161', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+      { chainKey: 'eip155:10', address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+    ],
     solanaRpcUrl: 'https://solana-rpc.publicnode.com',
   },
 };

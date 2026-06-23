@@ -21,6 +21,7 @@ import {
   buildEvmTransfer,
   buildErc20Transfer,
   buildSolDurableTransfer,
+  buildSolDurableSplTransfer,
   createDurableNonceAccount,
   addressToScript,
   checkBtcIntent,
@@ -208,6 +209,10 @@ export interface SpendDraft {
   amountBaseUnits: bigint;
   /** ERC-20 token contract (EVM only, optional) */
   tokenAddress?: string;
+  /** Token decimals for Solana SPL transferChecked. */
+  tokenDecimals?: number;
+  /** Source SPL token account owned by the policy wallet. */
+  solanaSourceTokenAccount?: string;
 }
 
 /**
@@ -354,15 +359,32 @@ export function useCreateSpend(core: CoreCtx) {
             resolved.payer,
           );
           createdSolanaNonce = nonce;
-          const plan = buildSolDurableTransfer({
-            fromPubkey: dwallet.publicKey,
-            to: draft.destination,
-            lamports: draft.amountBaseUnits,
-            nonce,
-          });
+          if (draft.tokenAddress && !draft.solanaSourceTokenAccount) {
+            throw new Error('SPL token account unknown');
+          }
+          const plan = draft.tokenAddress
+            ? buildSolDurableSplTransfer({
+                fromPubkey: dwallet.publicKey,
+                sourceTokenAccount: draft.solanaSourceTokenAccount!,
+                mint: draft.tokenAddress,
+                destinationOwner: draft.destination,
+                amount: draft.amountBaseUnits,
+                decimals: draft.tokenDecimals ?? 0,
+                nonce,
+              })
+            : buildSolDurableTransfer({
+                fromPubkey: dwallet.publicKey,
+                to: draft.destination,
+                lamports: draft.amountBaseUnits,
+                nonce,
+              });
+          if (draft.tokenAddress) {
+            assetBytes = solanaAddressBytes(draft.tokenAddress);
+          }
           const check = checkSolIntent({
             message: plan.message,
             ownPubkey: dwallet.publicKey,
+            asset: assetBytes,
             destination: destinationBytes,
             amount: draft.amountBaseUnits,
           });

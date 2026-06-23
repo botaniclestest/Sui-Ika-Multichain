@@ -1,8 +1,8 @@
 import type { SuiJsonRpcClient as SuiClient } from '@mysten/sui/jsonRpc';
 import type { MythosNetworkConfig } from '../config.js';
 import { fetchBtcBalance } from '../chains/btc.js';
-import { fetchEvmNativeBalance } from '../chains/evm.js';
-import { fetchSolBalance } from '../chains/solana.js';
+import { fetchErc20Balance, fetchEvmNativeBalance } from '../chains/evm.js';
+import { fetchSolBalance, fetchSolTokenBalances } from '../chains/solana.js';
 import { chainDescriptor } from '../chains/index.js';
 import { getVaultBalances } from '../policy/state.js';
 import { ChainKind, type ChainKindValue } from '../types.js';
@@ -11,6 +11,7 @@ import type { RecoveredWallet } from './discovery.js';
 export interface ChainBalanceRow {
   chainKey: string;
   kind: ChainKindValue;
+  assetKind: 'native' | 'token' | 'vault-coin';
   assetId: string;
   label: string;
   symbol: string;
@@ -20,6 +21,8 @@ export interface ChainBalanceRow {
   pendingAmount?: bigint;
   source: 'btc-esplora' | 'evm-rpc' | 'solana-rpc' | 'sui-vault';
   address?: string;
+  tokenAccount?: string;
+  mint?: string;
   status: 'ok' | 'error' | 'skipped';
   error?: string;
 }
@@ -43,6 +46,7 @@ export async function fetchRecoveredBalances(params: {
             {
               chainKey: chain.chainKey,
               kind: chain.kind,
+              assetKind: 'native',
               assetId: '',
               label: descriptor?.displayName ?? chain.chainKey,
               symbol: descriptor?.symbol ?? 'BTC',
@@ -61,11 +65,40 @@ export async function fetchRecoveredBalances(params: {
           if (!address) throw new Error('EVM address unknown');
           const rpc = config.evmRpcUrls[chain.chainKey];
           if (!rpc) throw new Error(`no RPC configured for ${chain.chainKey}`);
-          const amount = await fetchEvmNativeBalance(rpc, address);
+          const [amount, tokenRows] = await Promise.all([
+            fetchEvmNativeBalance(rpc, address),
+            Promise.all(
+              (config.evmTokens ?? [])
+                .filter((token) => token.chainKey === chain.chainKey)
+                .map(async (token): Promise<ChainBalanceRow | null> => {
+                  let tokenAmount: bigint;
+                  try {
+                    tokenAmount = await fetchErc20Balance(rpc, token.address, address);
+                  } catch {
+                    return null;
+                  }
+                  if (tokenAmount === 0n) return null;
+                  return {
+                    chainKey: chain.chainKey,
+                    kind: chain.kind,
+                    assetKind: 'token',
+                    assetId: token.address,
+                    label: token.name ?? token.symbol,
+                    symbol: token.symbol,
+                    decimals: token.decimals,
+                    amount: tokenAmount,
+                    source: 'evm-rpc',
+                    address,
+                    status: 'ok',
+                  };
+                }),
+            ),
+          ]);
           return [
             {
               chainKey: chain.chainKey,
               kind: chain.kind,
+              assetKind: 'native',
               assetId: '',
               label: descriptor?.displayName ?? chain.chainKey,
               symbol: descriptor?.symbol ?? 'ETH',
@@ -75,16 +108,24 @@ export async function fetchRecoveredBalances(params: {
               address,
               status: 'ok',
             },
+            ...tokenRows.filter((row): row is ChainBalanceRow => row !== null),
           ];
         }
 
         if (chain.kind === ChainKind.Solana) {
           if (!address) throw new Error('Solana address unknown');
           const amount = await fetchSolBalance(config.solanaRpcUrl, address);
+          let tokens: Awaited<ReturnType<typeof fetchSolTokenBalances>> = [];
+          try {
+            tokens = await fetchSolTokenBalances(config.solanaRpcUrl, address);
+          } catch {
+            tokens = [];
+          }
           return [
             {
               chainKey: chain.chainKey,
               kind: chain.kind,
+              assetKind: 'native',
               assetId: '',
               label: descriptor?.displayName ?? chain.chainKey,
               symbol: descriptor?.symbol ?? 'SOL',
@@ -94,27 +135,49 @@ export async function fetchRecoveredBalances(params: {
               address,
               status: 'ok',
             },
+            ...tokens.map((token) => ({
+              chainKey: chain.chainKey,
+              kind: chain.kind,
+              assetKind: 'token' as const,
+              assetId: token.mint,
+              label: `SPL ${shortId(token.mint)}`,
+              symbol: shortId(token.mint),
+              decimals: token.decimals,
+              amount: token.amount,
+              source: 'solana-rpc' as const,
+              address,
+              tokenAccount: token.tokenAccount,
+              mint: token.mint,
+              status: 'ok' as const,
+            })),
           ];
         }
 
         if (chain.kind === ChainKind.SuiVault) {
           const vaultBalances = await getVaultBalances(suiClient, recovered.state.walletId);
-          const rows = vaultBalances.map((balance) => ({
-            chainKey: chain.chainKey,
-            kind: chain.kind,
-            assetId: balance.coinType,
-            label: balance.coinType,
-            symbol: suiVaultSymbol(balance.coinType),
-            decimals: suiVaultDecimals(balance.coinType),
-            amount: balance.amount,
-            source: 'sui-vault' as const,
-            address: recovered.state.walletId,
-            status: 'ok' as const,
-          }));
+          const rows = await Promise.all(
+            vaultBalances.map(async (balance) => {
+              const metadata = await fetchSuiCoinMetadata(suiClient, balance.coinType);
+              return {
+                chainKey: chain.chainKey,
+                kind: chain.kind,
+                assetKind: 'vault-coin' as const,
+                assetId: balance.coinType,
+                label: metadata.name ?? balance.coinType,
+                symbol: metadata.symbol ?? suiVaultSymbol(balance.coinType),
+                decimals: metadata.decimals ?? suiVaultDecimals(balance.coinType),
+                amount: balance.amount,
+                source: 'sui-vault' as const,
+                address: recovered.state.walletId,
+                status: 'ok' as const,
+              };
+            }),
+          );
           if (rows.length === 0) {
             rows.push({
               chainKey: chain.chainKey,
               kind: chain.kind,
+              assetKind: 'vault-coin',
               assetId: '0x2::sui::SUI',
               label: 'Sui Vault',
               symbol: 'SUI',
@@ -132,6 +195,7 @@ export async function fetchRecoveredBalances(params: {
           {
             chainKey: chain.chainKey,
             kind: chain.kind,
+            assetKind: 'native',
             assetId: '',
             label: descriptor?.displayName ?? chain.chainKey,
             symbol: descriptor?.symbol ?? 'units',
@@ -148,6 +212,7 @@ export async function fetchRecoveredBalances(params: {
           {
             chainKey: chain.chainKey,
             kind: chain.kind,
+            assetKind: 'native',
             assetId: '',
             label: descriptor?.displayName ?? chain.chainKey,
             symbol: descriptor?.symbol ?? 'units',
@@ -178,4 +243,24 @@ function suiVaultSymbol(coinType: string): string {
 
 function suiVaultDecimals(coinType: string): number {
   return coinType === '0x2::sui::SUI' ? 9 : 0;
+}
+
+async function fetchSuiCoinMetadata(
+  client: SuiClient,
+  coinType: string,
+): Promise<{ symbol?: string; decimals?: number; name?: string }> {
+  try {
+    const metadata = await client.getCoinMetadata({ coinType });
+    return {
+      symbol: metadata?.symbol || undefined,
+      decimals: metadata?.decimals,
+      name: metadata?.name || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function shortId(value: string): string {
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }

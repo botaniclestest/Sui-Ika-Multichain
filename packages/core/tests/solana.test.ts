@@ -4,6 +4,7 @@ import { Transaction as SolTransaction } from '@solana/web3.js';
 import {
   assembleSolTransaction,
   buildSolDurableTransfer,
+  buildSolDurableSplTransfer,
   buildSolTransfer,
   deriveSolanaAddress,
   isSolanaBlockhashExpiredError,
@@ -16,6 +17,8 @@ import { concatBytes, hexToBytes } from '../src/codec.js';
 const SECRET = hexToBytes('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60');
 const PUB = ed25519.getPublicKey(SECRET);
 const DEST = 'GitYucwpNcg6Dx1Y15UQ9TQn8LZMX1uuqQNn8rXxEWNC';
+const SPL_MINT = 'So11111111111111111111111111111111111111112';
+const SPL_SOURCE = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const BLOCKHASH = 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N';
 const SYSVAR_RECENT_BLOCKHASHES = hexToBytes(
   '06a7d517192c568ee08a845f73d29788cf035c3145b21ab344d8062ea9400000',
@@ -208,5 +211,50 @@ describe('solana durable nonce', () => {
     });
     expect(duplicateAuthorityCheck.ok).toBe(false);
     expect(duplicateAuthorityCheck.errors).toContain('nonce authority is not the wallet signer');
+  });
+
+  it('builds and verifies a durable SPL token transferChecked message', () => {
+    const plan = buildSolDurableSplTransfer({
+      fromPubkey: PUB,
+      sourceTokenAccount: SPL_SOURCE,
+      mint: SPL_MINT,
+      destinationOwner: DEST,
+      amount: 1_500_000n,
+      decimals: 6,
+      nonce: NONCE,
+    });
+    const signature = ed25519.sign(plan.message, SECRET);
+    const wire = assembleSolTransaction(plan.assembly, signature);
+    const parsed = SolTransaction.from(Buffer.from(wire));
+    expect(parsed.verifySignatures()).toBe(true);
+    expect(parsed.instructions.length).toBe(3);
+
+    const ok = checkSolIntent({
+      message: plan.message,
+      ownPubkey: PUB,
+      asset: solanaAddressBytes(SPL_MINT),
+      destination: solanaAddressBytes(DEST),
+      amount: 1_500_000n,
+    });
+    expect(ok.ok, ok.errors.join('; ')).toBe(true);
+    expect(ok.summary).toContain('Solana SPL');
+
+    const wrongMint = checkSolIntent({
+      message: plan.message,
+      ownPubkey: PUB,
+      asset: new Uint8Array(32).fill(9),
+      destination: solanaAddressBytes(DEST),
+      amount: 1_500_000n,
+    });
+    expect(wrongMint.ok).toBe(false);
+
+    const wrongAmount = checkSolIntent({
+      message: plan.message,
+      ownPubkey: PUB,
+      asset: solanaAddressBytes(SPL_MINT),
+      destination: solanaAddressBytes(DEST),
+      amount: 1_500_001n,
+    });
+    expect(wrongAmount.ok).toBe(false);
   });
 });

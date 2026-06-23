@@ -731,9 +731,8 @@ public fun create_spend_request(
         true
     } else if (kind == KIND_SOLANA) {
         assert!(messages.length() == 1, EMessageCountMismatch);
-        assert!(asset.is_empty(), EBadChainConfig);
         let own_pubkey = borrow_address_book(wallet, &chain_key);
-        verify_solana::verify(messages.borrow(0), own_pubkey, &destination, amount);
+        verify_solana::verify_with_asset(messages.borrow(0), own_pubkey, &asset, &destination, amount);
         true
     } else {
         abort EBadChainConfig

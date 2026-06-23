@@ -17,6 +17,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction as SolTransaction,
+  TransactionInstruction,
 } from '@solana/web3.js';
 import { base58 } from '@scure/base';
 import { base64ToBytes, btcVarint, bytesToBase64, bytesToHex, concatBytes } from '../codec.js';
@@ -35,6 +36,17 @@ export interface DurableNonce {
   nonceValue: string;
 }
 
+export interface SolTokenBalance {
+  mint: string;
+  tokenAccount: string;
+  amount: bigint;
+  decimals: number;
+  uiAmountString: string;
+}
+
+export const SPL_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
 // === derivation ===
 
 export function deriveSolanaAddress(publicKey: Uint8Array): string {
@@ -44,6 +56,14 @@ export function deriveSolanaAddress(publicKey: Uint8Array): string {
 
 export function solanaAddressBytes(address: string): Uint8Array {
   return new PublicKey(address).toBytes();
+}
+
+export function associatedTokenAddress(mint: string, owner: string): string {
+  const [ata] = PublicKey.findProgramAddressSync(
+    [new PublicKey(owner).toBuffer(), SPL_TOKEN_PROGRAM_ID.toBuffer(), new PublicKey(mint).toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+  return ata.toBase58();
 }
 
 // === transaction building ===
@@ -113,6 +133,73 @@ export function buildSolDurableTransfer(params: {
   return {
     message,
     assembly: { messageBase64: bytesToBase64(message) },
+  };
+}
+
+function u64le(value: bigint): Uint8Array {
+  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new Error('value does not fit u64');
+  const out = new Uint8Array(8);
+  new DataView(out.buffer).setBigUint64(0, value, true);
+  return out;
+}
+
+export function buildSolDurableSplTransfer(params: {
+  fromPubkey: Uint8Array;
+  sourceTokenAccount: string;
+  mint: string;
+  destinationOwner: string;
+  amount: bigint;
+  decimals: number;
+  nonce: DurableNonce;
+}): SolSpendPlan & { destinationTokenAccount: string } {
+  if (!Number.isInteger(params.decimals) || params.decimals < 0 || params.decimals > 255) {
+    throw new Error('SPL token decimals must fit u8');
+  }
+  const from = new PublicKey(params.fromPubkey);
+  const mint = new PublicKey(params.mint);
+  const destinationOwner = new PublicKey(params.destinationOwner);
+  const destinationTokenAccount = new PublicKey(associatedTokenAddress(params.mint, params.destinationOwner));
+  const tx = new SolTransaction({
+    feePayer: from,
+    recentBlockhash: params.nonce.nonceValue,
+  });
+  tx.add(
+    SystemProgram.nonceAdvance({
+      noncePubkey: new PublicKey(params.nonce.noncePubkey),
+      authorizedPubkey: from,
+    }),
+  );
+  tx.add(
+    new TransactionInstruction({
+      programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: from, isSigner: true, isWritable: true },
+        { pubkey: destinationTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: destinationOwner, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SPL_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      data: new Uint8Array([1]) as never, // AssociatedTokenAccountInstruction::CreateIdempotent
+    }),
+  );
+  tx.add(
+    new TransactionInstruction({
+      programId: SPL_TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: new PublicKey(params.sourceTokenAccount), isSigner: false, isWritable: true },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: destinationTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: from, isSigner: true, isWritable: false },
+      ],
+      data: concatBytes(new Uint8Array([12]), u64le(params.amount), new Uint8Array([params.decimals])) as never,
+    }),
+  );
+  const message = Uint8Array.from(tx.compileMessage().serialize());
+  return {
+    message,
+    assembly: { messageBase64: bytesToBase64(message) },
+    destinationTokenAccount: destinationTokenAccount.toBase58(),
   };
 }
 
@@ -424,6 +511,37 @@ export async function broadcastSol(rpcUrl: string, signedTx: Uint8Array): Promis
 export async function fetchSolBalance(rpcUrl: string, address: string): Promise<bigint> {
   const connection = new Connection(rpcUrl, 'confirmed');
   return BigInt(await connection.getBalance(new PublicKey(address), 'confirmed'));
+}
+
+export async function fetchSolTokenBalances(
+  rpcUrl: string,
+  owner: string,
+): Promise<SolTokenBalance[]> {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const accounts = await connection.getParsedTokenAccountsByOwner(new PublicKey(owner), {
+    programId: SPL_TOKEN_PROGRAM_ID,
+  });
+  return accounts.value
+    .map((entry) => {
+      const info = (entry.account.data as { parsed?: { info?: unknown } }).parsed?.info as
+        | {
+            mint?: string;
+            tokenAmount?: { amount?: string; decimals?: number; uiAmountString?: string };
+          }
+        | undefined;
+      if (!info?.mint || !info.tokenAmount?.amount || info.tokenAmount.decimals === undefined) {
+        return null;
+      }
+      return {
+        mint: info.mint,
+        tokenAccount: entry.pubkey.toBase58(),
+        amount: BigInt(info.tokenAmount.amount),
+        decimals: info.tokenAmount.decimals,
+        uiAmountString: info.tokenAmount.uiAmountString ?? info.tokenAmount.amount,
+      } satisfies SolTokenBalance;
+    })
+    .filter((row): row is SolTokenBalance => !!row && row.amount > 0n)
+    .sort((a, b) => a.mint.localeCompare(b.mint));
 }
 
 export function solSignatureBase58(signature64: Uint8Array): string {

@@ -11,6 +11,7 @@
 import { Transaction as EthersTransaction, getAddress } from 'ethers';
 import { bytesEqual, bytesToHex, concatBytes, hexToBytes } from '../codec.js';
 import { dsha256 } from '../chains/btc.js';
+import { ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID } from '../chains/solana.js';
 
 export interface IntentCheckResult {
   ok: boolean;
@@ -168,16 +169,21 @@ export function checkEvmIntent(params: {
 const SYSVAR_RECENT_BLOCKHASHES = hexToBytes(
   '06a7d517192c568ee08a845f73d29788cf035c3145b21ab344d8062ea9400000',
 );
+const SPL_TOKEN_PROGRAM = SPL_TOKEN_PROGRAM_ID.toBytes();
+const ASSOCIATED_TOKEN_PROGRAM = ASSOCIATED_TOKEN_PROGRAM_ID.toBytes();
 
 export function checkSolIntent(params: {
   message: Uint8Array;
   ownPubkey: Uint8Array;
+  asset?: Uint8Array; // empty/omitted = native SOL; 32-byte mint = SPL token
   destination: Uint8Array;
   amount: bigint;
 }): IntentCheckResult {
   const errors: string[] = [];
   const { message, ownPubkey, destination, amount } = params;
+  const asset = params.asset ?? new Uint8Array();
   let durable = false;
+  let spl = false;
   try {
     let o = 0;
     const numRequired = message[o++];
@@ -194,12 +200,24 @@ export function checkSolIntent(params: {
     o += 32; // blockhash / nonce value
     const nInstr = readShortvec(message, o);
     o = nInstr.offset;
-    if (nInstr.value !== 1 && nInstr.value !== 2)
-      errors.push('must contain 1 (transfer) or 2 (nonce advance + transfer) instructions');
-    durable = nInstr.value === 2;
+    if (asset.length === 0) {
+      if (nInstr.value !== 1 && nInstr.value !== 2) {
+        errors.push('must contain 1 (transfer) or 2 (nonce advance + transfer) instructions');
+      }
+      durable = nInstr.value === 2;
+    } else {
+      spl = true;
+      durable = true;
+      if (asset.length !== 32) errors.push('SPL mint asset must be 32 bytes');
+      if (nInstr.value !== 3) {
+        errors.push('SPL transfer must contain nonce advance, ATA create-idempotent, and transferChecked');
+      }
+    }
 
     const isSystem = (idx: number) =>
       accounts[idx] !== undefined && accounts[idx].every((b) => b === 0);
+    const accountEq = (idx: number, expected: Uint8Array) =>
+      bytesEqual(accounts[idx] ?? new Uint8Array(), expected);
 
     if (durable) {
       // instruction 0: AdvanceNonceAccount with the wallet as authority
@@ -222,6 +240,59 @@ export function checkSolIntent(params: {
       const dv0 = new DataView(message.buffer, message.byteOffset + o);
       if (dv0.getUint32(0, true) !== 4) errors.push('not AdvanceNonceAccount');
       o += 4;
+    }
+
+    if (spl) {
+      const ataProgramIdx = message[o++];
+      if (!accountEq(ataProgramIdx, ASSOCIATED_TOKEN_PROGRAM)) errors.push('ATA create program mismatch');
+      const nAtaAccounts = readShortvec(message, o);
+      o = nAtaAccounts.offset;
+      if (nAtaAccounts.value !== 6) errors.push('ATA create must reference 6 accounts');
+      const payerIdx = message[o++];
+      const ataIdx = message[o++];
+      const ownerIdx = message[o++];
+      const mintIdx = message[o++];
+      const systemIdx = message[o++];
+      const tokenProgramIdx = message[o++];
+      if (payerIdx !== 0) errors.push('ATA payer is not the wallet signer');
+      if (!accountEq(ownerIdx, destination)) errors.push('ATA owner is not the declared destination owner');
+      if (!accountEq(mintIdx, asset)) errors.push('ATA mint mismatch');
+      if (!isSystem(systemIdx)) errors.push('ATA system program mismatch');
+      if (!accountEq(tokenProgramIdx, SPL_TOKEN_PROGRAM)) errors.push('ATA token program mismatch');
+      const ataDataLen = readShortvec(message, o);
+      o = ataDataLen.offset;
+      if (ataDataLen.value !== 1) errors.push('ATA create data must be create-idempotent');
+      if (message[o++] !== 1) errors.push('ATA instruction is not create-idempotent');
+
+      const tokenProgramInstructionIdx = message[o++];
+      if (!accountEq(tokenProgramInstructionIdx, SPL_TOKEN_PROGRAM)) errors.push('SPL transfer program mismatch');
+      const nTokenAccounts = readShortvec(message, o);
+      o = nTokenAccounts.offset;
+      if (nTokenAccounts.value !== 4) errors.push('transferChecked must reference 4 accounts');
+      o++; // source token account: token program verifies owner at execution time
+      const transferMintIdx = message[o++];
+      const transferDestIdx = message[o++];
+      const transferOwnerIdx = message[o++];
+      if (!accountEq(transferMintIdx, asset)) errors.push('transfer mint mismatch');
+      if (transferDestIdx !== ataIdx) errors.push('transfer destination is not the created ATA');
+      if (transferOwnerIdx !== 0) errors.push('transfer owner is not the wallet signer');
+      const tokenDataLen = readShortvec(message, o);
+      o = tokenDataLen.offset;
+      if (tokenDataLen.value !== 10) errors.push('transferChecked data malformed');
+      if (message[o++] !== 12) errors.push('not SPL Token transferChecked');
+      const tokenAmount = readU64LE(message, o);
+      o += 8;
+      o++; // decimals are enforced by SPL Token against the mint at execution time
+      if (tokenAmount !== amount) errors.push(`token amount ${tokenAmount} != declared ${amount}`);
+      if (o !== message.length) errors.push('trailing bytes in message');
+      if (!bytesEqual(accounts[0] ?? new Uint8Array(), ownPubkey)) {
+        errors.push('signer is not the wallet');
+      }
+      return {
+        ok: errors.length === 0,
+        errors,
+        summary: `Solana SPL (durable nonce): ${amount} base units of ${bytesToHex(asset)} -> owner ${bytesToHex(destination)}`,
+      };
     }
 
     // transfer instruction
@@ -257,6 +328,11 @@ export function checkSolIntent(params: {
     errors,
     summary: `Solana${durable ? ' (durable nonce)' : ''}: ${amount} lamports -> ${bytesToHex(destination)}`,
   };
+}
+
+function readU64LE(bytes: Uint8Array, offset: number): bigint {
+  const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 8);
+  return view.getBigUint64(0, true);
 }
 
 function readShortvec(bytes: Uint8Array, offset: number): { value: number; offset: number } {
