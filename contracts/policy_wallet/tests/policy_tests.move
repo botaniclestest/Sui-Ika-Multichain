@@ -439,6 +439,56 @@ fun unpause_requires_admin_proposal() {
 // === Signer rotation ===
 
 #[test]
+#[expected_failure(abort_code = pw::EBadThreshold)]
+fun invalid_threshold_proposal_rejected_at_creation() {
+    let mut s = ts::begin(ALICE);
+    let c = setup(&mut s);
+
+    ts::next_tx(&mut s, ALICE);
+    {
+        let mut wallet = ts::take_shared<PolicyWallet>(&s);
+        pw::create_proposal(
+            &mut wallet,
+            3, // SET_THRESHOLDS
+            vector::empty(),
+            option::none(),
+            vector::empty(),
+            vector[2, 1], // admin threshold cannot be below spend threshold
+            false,
+            &c,
+            ts::ctx(&mut s),
+        );
+        ts::return_shared(wallet);
+    };
+    abort 0
+}
+
+#[test]
+#[expected_failure(abort_code = pw::EBadThreshold)]
+fun impossible_remove_signer_proposal_rejected_at_creation() {
+    let mut s = ts::begin(ALICE);
+    let c = setup(&mut s);
+
+    ts::next_tx(&mut s, ALICE);
+    {
+        let mut wallet = ts::take_shared<PolicyWallet>(&s);
+        pw::create_proposal(
+            &mut wallet,
+            2, // REMOVE_SIGNER
+            vector::empty(),
+            option::some(BOB),
+            vector::empty(),
+            vector::empty(),
+            false,
+            &c,
+            ts::ctx(&mut s),
+        );
+        ts::return_shared(wallet);
+    };
+    abort 0
+}
+
+#[test]
 fun add_and_remove_signer_via_proposals() {
     let mut s = ts::begin(ALICE);
     let mut c = setup(&mut s);

@@ -1438,8 +1438,15 @@ fun validate_proposal(
     } else if (action == ACTION_REMOVE_SIGNER) {
         assert!(addr_param.is_some(), EBadProposal);
         assert!(wallet.signers.contains(addr_param.borrow()), ENotSigner);
+        let remaining = wallet.signers.length() - 1;
+        assert!(remaining >= wallet.threshold && remaining >= wallet.admin_threshold, EBadThreshold);
     } else if (action == ACTION_SET_THRESHOLDS) {
         assert!(u_params.length() == 2, EBadProposal);
+        let new_threshold = u_params[0];
+        let new_admin = u_params[1];
+        let n = (wallet.signers.length() as u128);
+        assert!(new_threshold >= 1 && new_threshold <= n, EBadThreshold);
+        assert!(new_admin >= new_threshold && new_admin <= n, EBadThreshold);
     } else if (action == ACTION_SET_TIMELOCKS) {
         assert!(u_params.length() == 2, EBadProposal);
     } else if (action == ACTION_SET_EXPIRY) {

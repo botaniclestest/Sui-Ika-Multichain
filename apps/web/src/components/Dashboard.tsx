@@ -1157,13 +1157,86 @@ const CREATE_PROPOSAL_ACTIONS = [
 ] as const;
 
 type DetailRow = { label: string; value: string; mono?: boolean };
+const MAX_SIGNERS = 16;
+const U64_MAX = (1n << 64n) - 1n;
 
-function proposalUParam(proposal: AdminProposalState, index: number): bigint | null {
+function proposalUParam(proposal: { uParams: bigint[] }, index: number): bigint | null {
   return index < proposal.uParams.length ? proposal.uParams[index] : null;
 }
 
 function fmtMaybe(value: bigint | null, fmt: (value: bigint) => string): string {
   return value === null ? '(missing)' : fmt(value);
+}
+
+function validateThresholdPair(signerCount: number, spendThreshold: bigint, adminThreshold: bigint): string | null {
+  const n = BigInt(signerCount);
+  if (spendThreshold < 1n) return 'Spend threshold must be at least 1.';
+  if (spendThreshold > n) return `Spend threshold cannot exceed the ${signerCount} current signers.`;
+  if (adminThreshold < spendThreshold) return 'Admin threshold must be at least the spend threshold.';
+  if (adminThreshold > n) return `Admin threshold cannot exceed the ${signerCount} current signers.`;
+  return null;
+}
+
+function proposalPolicyBlocker(
+  data: RecoveredWallet,
+  proposal: {
+    action: number;
+    chainKey: string;
+    addrParam: string | null;
+    uParams: bigint[];
+    boolParam: boolean;
+  },
+): string | null {
+  const signerCount = data.state.signers.length;
+
+  if (proposal.action === ProposalAction.AddSigner) {
+    if (!proposal.addrParam) return 'Signer address is required.';
+    try {
+      normalizeSuiAddress(proposal.addrParam);
+    } catch {
+      return 'Signer address is not a valid Sui address.';
+    }
+    if (containsSuiAddress(data.state.signers, proposal.addrParam)) return 'That address is already a signer.';
+    if (signerCount >= MAX_SIGNERS) return `This wallet already has the maximum ${MAX_SIGNERS} signers.`;
+  } else if (proposal.action === ProposalAction.RemoveSigner) {
+    if (!proposal.addrParam) return 'Signer address is required.';
+    try {
+      normalizeSuiAddress(proposal.addrParam);
+    } catch {
+      return 'Signer address is not a valid Sui address.';
+    }
+    if (!containsSuiAddress(data.state.signers, proposal.addrParam)) return 'That address is not a current signer.';
+    const remaining = BigInt(signerCount - 1);
+    if (remaining < data.state.threshold || remaining < data.state.adminThreshold) {
+      return `Removing this signer would leave ${remaining.toString()} signers, below the current threshold requirements.`;
+    }
+  } else if (proposal.action === ProposalAction.SetThresholds) {
+    const spendThreshold = proposalUParam(proposal, 0);
+    const adminThreshold = proposalUParam(proposal, 1);
+    if (spendThreshold === null || adminThreshold === null) return 'Spend and admin thresholds are required.';
+    return validateThresholdPair(signerCount, spendThreshold, adminThreshold);
+  } else if (proposal.action === ProposalAction.SetTimelocks) {
+    if (proposal.uParams.length !== 2) return 'Spend and admin timelocks are required.';
+    if (proposal.uParams.some((v) => v > U64_MAX)) return 'Timelocks are too large.';
+  } else if (proposal.action === ProposalAction.SetExpiry) {
+    const expiry = proposalUParam(proposal, 0);
+    if (expiry === null || expiry <= 0n) return 'Request expiry must be greater than 0.';
+    if (expiry > U64_MAX) return 'Request expiry is too large.';
+  } else if (proposal.action === ProposalAction.SetChainLimits) {
+    if (!data.state.chains.has(proposal.chainKey)) return 'Select a configured chain.';
+    if (proposal.uParams.length !== 5) return 'All chain limit fields are required.';
+    const [fast, perTx, windowLimit, windowMs] = proposal.uParams;
+    if (perTx <= 0n) return 'Per-tx limit must be greater than 0.';
+    if (fast > perTx) return 'Fast-path limit cannot exceed the per-tx limit.';
+    if (windowLimit < perTx) return 'Window limit must be at least the per-tx limit.';
+    if (windowMs <= 0n || windowMs > U64_MAX) return 'Window length must be greater than 0 and fit in u64.';
+  } else if (isChainProposal(proposal.action) && proposal.action !== ProposalAction.SetAddressBook) {
+    if (!data.state.chains.has(proposal.chainKey)) return 'Select a configured chain.';
+  } else if (proposal.action === ProposalAction.Unpause && !data.state.paused) {
+    return 'Wallet is not paused.';
+  }
+
+  return null;
 }
 
 function proposalBytesRows(
@@ -1356,11 +1429,23 @@ function GovernanceTab({
       }
       const needsAddr = action === ProposalAction.AddSigner || action === ProposalAction.RemoveSigner;
       const needsBytes = isDestinationBytesProposal(action);
+      const addrForProposal = needsAddr ? addrParam : null;
+      const bytesForProposal = needsBytes
+        ? parseChainBytesParam({ value: bytesParam, chainKey, data, core })
+        : new Uint8Array();
+      const policyBlocker = proposalPolicyBlocker(data, {
+        action,
+        chainKey,
+        addrParam: addrForProposal,
+        uParams,
+        boolParam,
+      });
+      if (policyBlocker) throw new Error(policyBlocker);
       const tx = buildCreateProposalTx(core.ids, walletId, {
         action,
         chainKey: chainKey ? utf8(chainKey) : new Uint8Array(),
-        addrParam: needsAddr ? addrParam : null,
-        bytesParam: needsBytes ? parseChainBytesParam({ value: bytesParam, chainKey, data, core }) : new Uint8Array(),
+        addrParam: addrForProposal,
+        bytesParam: bytesForProposal,
         uParams,
         boolParam,
       });
@@ -1514,12 +1599,22 @@ function ProposalCard({
     (containsSuiAddress(proposal.approvals, account.address) ||
       containsSuiAddress(proposal.rejections, account.address));
   const reached = proposal.thresholdReachedAtMs > 0n;
-  const executableAt = reached
-    ? Number(proposal.thresholdReachedAtMs + data.state.timelockAdminMs)
-    : null;
-  const executableNow = !!executableAt && Date.now() >= executableAt;
+  const nowMs = BigInt(Date.now());
+  const executableAtMs = reached ? proposal.thresholdReachedAtMs + data.state.timelockAdminMs : null;
+  const executableAt = executableAtMs === null ? null : Number(executableAtMs);
+  const expiresAtMs = executableAtMs === null ? null : executableAtMs + data.state.requestExpiryMs;
+  const thresholdVoteExpiresAtMs = reached ? null : proposal.createdAtMs + data.state.requestExpiryMs;
+  const expiryBlocker =
+    expiresAtMs !== null && nowMs > expiresAtMs
+      ? `Execution window expired after ${new Date(Number(expiresAtMs)).toLocaleString()}. Create a replacement proposal.`
+      : thresholdVoteExpiresAtMs !== null && nowMs > thresholdVoteExpiresAtMs
+        ? `Voting window expired after ${new Date(Number(thresholdVoteExpiresAtMs)).toLocaleString()}. Create a replacement proposal.`
+        : null;
+  const executableNow = executableAtMs !== null && nowMs >= executableAtMs && !expiryBlocker;
   const needed = Math.max(0, Number(data.state.adminThreshold) - proposal.approvals.length);
   const detailRows = proposalDetailRows(data, proposal);
+  const policyBlocker = proposalPolicyBlocker(data, proposal);
+  const executionBlockers = [expiryBlocker, policyBlocker].filter((v): v is string => !!v);
 
   return (
     <div className="card request" data-chain={proposal.chainKey || undefined}>
@@ -1551,6 +1646,11 @@ function ProposalCard({
           Uses current admin timelock ({fmtDuration(data.state.timelockAdminMs)}) from the threshold time; future timelock changes can move this execution date.
         </p>
       )}
+      {executionBlockers.map((blocker) => (
+        <div className="error small" key={blocker}>
+          Blocked: {blocker}
+        </div>
+      ))}
       {proposal.status === RequestStatus.Pending && (
         <div className="row wrap">
           {!isSigner && <span className="muted small">Connect as a wallet signer to vote.</span>}
@@ -1585,7 +1685,7 @@ function ProposalCard({
           {reached && executableAt && !executableNow && (
             <span className="muted small">Executable after {new Date(executableAt).toLocaleString()}.</span>
           )}
-          {isSigner && reached && executableNow && (
+          {isSigner && reached && executableNow && executionBlockers.length === 0 && (
             <button
               className="primary"
               disabled={!core.ids}

@@ -10,12 +10,13 @@ Last updated: 2026-06-27
 - Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends`.
 - This handoff records the subsequent testnet package upgrade, deployment metadata update, Sui Vault direct-send warning cleanup, and squid backdrop update.
 - Sui CLI active environment is currently `testnet`.
-- Local preview is running from rebuilt output at `http://localhost:4173/` and `http://192.168.68.76:4173/`.
+- Local preview should be opened from Windows/Chrome at `http://localhost:4173/`.
 - Preview process details at handoff:
-  - wrapper PID `2915589`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
-  - Vite PID `2915603`: `vite preview --host 0.0.0.0`
-- Local dev server for the current Windows/WSL workstation verification is running at `http://127.0.0.1:5174/` because `5173` was already occupied.
-- If Windows localhost forwarding does not expose the WSL dev server, use the current WSL network URL shown by Vite, e.g. `http://172.28.129.187:5174/`.
+  - wrapper PID `2915589`: historical prior preview process
+  - Vite PID `2915603`: historical prior preview process
+- Local dev server for development uses the simple Windows/WSL-friendly bind:
+  - `pnpm --filter @mythos/web dev --host 0.0.0.0`
+  - Open `http://localhost:5173/` in the Windows browser. Avoid transient WSL IP URLs for normal wallet testing.
 
 ## What This Project Is
 
@@ -58,9 +59,8 @@ Last updated: 2026-06-27
   - `poseidon-lite@0.2.1` is now a direct web dependency and is included in Vite dependency optimization, so the import is rewritten to Vite's CommonJS wrapper.
 - Added Playwright browser testing support for the web app:
   - `@playwright/test` is a web dev dependency.
-  - `apps/web/playwright.config.ts` starts/reuses Vite on port `5174`.
+  - `apps/web/playwright.config.ts` starts/reuses Vite on port `5174` with `--host 0.0.0.0`; tests still browse via local loopback.
   - `apps/web/tests/smoke.spec.ts` catches page/module crashes and verifies the wallet shell renders.
-  - Chromium runtimes and WSL browser system dependencies were installed on this workstation.
 
 ## Sui Vault Direct-Transfer Incident
 
@@ -154,15 +154,13 @@ Last updated: 2026-06-27
   - `pnpm --filter @mythos/wallet-core test`: passed, 19 tests.
   - `pnpm --filter @mythos/wallet-core build && pnpm --filter @mythos/web build`: passed.
   - Live testnet query confirmed direct-send rows are not returned as Sui Vault balances.
-- After the Windows/WSL recovery fix:
+- After the recovery fix:
   - `pnpm --filter @mythos/wallet-core test`: passed, 19 tests.
   - `pnpm --filter @mythos/web build`: passed and emitted `dist/assets/dwallet_mpc_wasm_bg-*.wasm`.
   - Local Vite dev probe at `http://127.0.0.1:5174/` confirmed the actual served Ika WASM path returns `Content-Type: application/wasm`, `Content-Length: 3439425`, and magic bytes `00 61 73 6d`.
-  - Playwright browser-runtime smoke was not run because the local Playwright Chromium executable is not installed on this machine.
 - After the Poseidon/Playwright follow-up:
   - `pnpm --filter @mythos/web build`: passed.
   - `pnpm --filter @mythos/web test:e2e`: passed, 1 Chromium smoke test.
-  - Host-side Playwright loaded `http://172.28.129.187:5174/` with no page errors or console errors.
 - `git diff --check origin/main...HEAD`: passed before pushing feature commits.
 - Strict outgoing diff credential-format scan returned no matches before pushing feature commits.
 - Testnet upgrade dry-run first failed because `Published.toml` still pointed at the original package; aligning testnet `published-at` to the previous latest package fixed the package mismatch.
@@ -196,7 +194,7 @@ Known non-blocking warnings:
 
 - Start preview server: `setsid -f pnpm --dir apps/web exec vite preview --host 0.0.0.0 > /tmp/opencode/mythos-web-preview.log 2>&1 < /dev/null`
 - Stop preview server: `pkill -f "vite preview"`
-- Preview URLs: `http://localhost:4173/`, `http://192.168.68.76:4173/`
+- Preview URL: `http://localhost:4173/`
 - Build frontend: `pnpm --filter @mythos/web build`
 - Run core checks: `pnpm --filter @mythos/wallet-core typecheck`, `pnpm --filter @mythos/wallet-core test`, `pnpm --filter @mythos/wallet-core build`
 - Run Move tests: `pnpm test:move`
