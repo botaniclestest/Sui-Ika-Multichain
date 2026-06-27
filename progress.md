@@ -1,6 +1,6 @@
 # Progress Handoff
 
-Last updated: 2026-06-23
+Last updated: 2026-06-27
 
 ## Current State
 
@@ -14,6 +14,7 @@ Last updated: 2026-06-23
 - Preview process details at handoff:
   - wrapper PID `2915589`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
   - Vite PID `2915603`: `vite preview --host 0.0.0.0`
+- Local dev server for the current Windows/WSL workstation verification is running at `http://127.0.0.1:5174/` because `5173` was already occupied.
 
 ## What This Project Is
 
@@ -47,6 +48,10 @@ Last updated: 2026-06-23
   - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
 - Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
 - Added uploaded `stINKy.jpg` as a full-viewport fixed squid backdrop behind the cards and cleaned up the header squid logo presentation.
+- Fixed clean-machine wallet recovery in the Vite dev app:
+  - The browser was prebundling `@ika.xyz/sdk` / `@ika.xyz/ika-wasm` into Vite's optimized dependency cache.
+  - The generated Ika web loader resolves `dwallet_mpc_wasm_bg.wasm` relative to `import.meta.url`; after prebundling, that relative URL pointed at the cache and the dev server returned `index.html` (`3c 21 64 6f`, `<!do`) instead of WASM.
+  - `apps/web/vite.config.ts` now excludes both packages from `optimizeDeps`, so dWallet public-key extraction can load the real WASM and re-derive BTC/EVM/Solana addresses from on-chain dWallet public output again.
 
 ## Sui Vault Direct-Transfer Incident
 
@@ -140,6 +145,11 @@ Last updated: 2026-06-23
   - `pnpm --filter @mythos/wallet-core test`: passed, 19 tests.
   - `pnpm --filter @mythos/wallet-core build && pnpm --filter @mythos/web build`: passed.
   - Live testnet query confirmed direct-send rows are not returned as Sui Vault balances.
+- After the Windows/WSL recovery fix:
+  - `pnpm --filter @mythos/wallet-core test`: passed, 19 tests.
+  - `pnpm --filter @mythos/web build`: passed and emitted `dist/assets/dwallet_mpc_wasm_bg-*.wasm`.
+  - Local Vite dev probe at `http://127.0.0.1:5174/` confirmed the actual served Ika WASM path returns `Content-Type: application/wasm`, `Content-Length: 3439425`, and magic bytes `00 61 73 6d`.
+  - Playwright browser-runtime smoke was not run because the local Playwright Chromium executable is not installed on this machine.
 - `git diff --check origin/main...HEAD`: passed before pushing feature commits.
 - Strict outgoing diff credential-format scan returned no matches before pushing feature commits.
 - Testnet upgrade dry-run first failed because `Published.toml` still pointed at the original package; aligning testnet `published-at` to the previous latest package fixed the package mismatch.
