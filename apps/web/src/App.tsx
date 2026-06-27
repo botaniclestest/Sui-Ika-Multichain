@@ -7,7 +7,6 @@ import { useCore, useMyWallets } from './hooks';
 import { CreateWizard } from './components/CreateWizard';
 import { Dashboard } from './components/Dashboard';
 import stinkySquid from './assets/stinky-squid.svg';
-import stinkyBackdrop from '../../../stINKy.jpg';
 
 type View = { kind: 'list' } | { kind: 'create' } | { kind: 'wallet'; walletId: string };
 type GasPuff = {
@@ -46,8 +45,8 @@ export default function App() {
     const count = 4 + Math.round(strength * 4);
     const burst: GasPuff[] = Array.from({ length: count }, (_, i) => ({
       id: ++puffId.current,
-      x: 60 + Math.random() * 16,
-      y: 35 + Math.random() * 24,
+      x: 69 + Math.random() * 15,
+      y: 42 + Math.random() * 24,
       size: 42 + Math.random() * 78,
       driftX: -70 - Math.random() * 105,
       driftY: -18 + Math.random() * 44,
@@ -58,7 +57,7 @@ export default function App() {
 
   function maybeEmitActionGas(target: EventTarget | null) {
     if (!(target instanceof HTMLElement)) return;
-    if (target.closest('button.primary, button.danger, button.wallet-link, .tabs button, select')) {
+    if (target.closest('button.primary, button.danger, button.wallet-link, .connect-slot button, .tabs button, select')) {
       emitGasPuff(target.closest('select') ? 1.35 : 1);
     }
   }
@@ -74,7 +73,23 @@ export default function App() {
   return (
     <>
       <div className="squid-scene" aria-hidden="true">
-        <div className="squid-photo" style={{ backgroundImage: `url(${stinkyBackdrop})` }} />
+        <div className="water-depth" />
+        <div className="squid-glow" />
+        <div className="squid-figure">
+          <span className="squid-shadow" />
+          <span className="squid-fin squid-fin-left" />
+          <span className="squid-fin squid-fin-right" />
+          <span className="squid-mantle" />
+          <span className="squid-head" />
+          <span className="squid-eye squid-eye-left" />
+          <span className="squid-eye squid-eye-right" />
+          <span className="squid-tentacle squid-tentacle-1" />
+          <span className="squid-tentacle squid-tentacle-2" />
+          <span className="squid-tentacle squid-tentacle-3" />
+          <span className="squid-tentacle squid-tentacle-4" />
+          <span className="squid-tentacle squid-tentacle-5" />
+          <span className="squid-tentacle squid-tentacle-6" />
+        </div>
         <div className="water-haze" />
         <div className="water-caustics" />
         <div className="bubble-field">
