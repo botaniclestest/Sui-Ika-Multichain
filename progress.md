@@ -50,6 +50,9 @@ Last updated: 2026-06-27
   - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
 - Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
 - Added uploaded `stINKy.jpg` as a full-viewport fixed squid backdrop behind the cards and cleaned up the header squid logo presentation.
+- Upgraded the backdrop into an animated underwater scene:
+  - The squid image gently bobs with water shimmer and bubble drift.
+  - Primary actions, danger actions, tabs, wallet links, and selects trigger short green gas puffs behind the UI.
 - Fixed clean-machine wallet recovery in the Vite dev app:
   - The browser was prebundling `@ika.xyz/sdk` / `@ika.xyz/ika-wasm` into Vite's optimized dependency cache.
   - The generated Ika web loader resolves `dwallet_mpc_wasm_bg.wasm` relative to `import.meta.url`; after prebundling, that relative URL pointed at the cache and the dev server returned `index.html` (`3c 21 64 6f`, `<!do`) instead of WASM.

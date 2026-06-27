@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useCurrentAccount, useCurrentNetwork, useDAppKit } from '@mysten/dapp-kit-react';
 import { ConnectButton } from '@mysten/dapp-kit-react/ui';
 import type { SuiNetwork } from '@mythos/wallet-core';
@@ -10,6 +10,15 @@ import stinkySquid from './assets/stinky-squid.svg';
 import stinkyBackdrop from '../../../stINKy.jpg';
 
 type View = { kind: 'list' } | { kind: 'create' } | { kind: 'wallet'; walletId: string };
+type GasPuff = {
+  id: number;
+  x: number;
+  y: number;
+  size: number;
+  driftX: number;
+  driftY: number;
+  delayMs: number;
+};
 
 export default function App() {
   const dAppKit = useDAppKit();
@@ -20,6 +29,8 @@ export default function App() {
   const core = useCore(network);
   const { wallets, loading, refresh } = useMyWallets(core);
   const deployment = getDeployment(network);
+  const puffId = useRef(0);
+  const [gasPuffs, setGasPuffs] = useState<GasPuff[]>([]);
 
   useEffect(() => {
     if (dAppNetwork !== network) dAppKit.switchNetwork(network);
@@ -31,10 +42,73 @@ export default function App() {
     setView({ kind: 'list' });
   }
 
+  function emitGasPuff(strength = 1) {
+    const count = 4 + Math.round(strength * 4);
+    const burst: GasPuff[] = Array.from({ length: count }, (_, i) => ({
+      id: ++puffId.current,
+      x: 60 + Math.random() * 16,
+      y: 35 + Math.random() * 24,
+      size: 42 + Math.random() * 78,
+      driftX: -70 - Math.random() * 105,
+      driftY: -18 + Math.random() * 44,
+      delayMs: i * 55,
+    }));
+    setGasPuffs((current) => [...current.slice(-18), ...burst]);
+  }
+
+  function maybeEmitActionGas(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return;
+    if (target.closest('button.primary, button.danger, button.wallet-link, .tabs button, select')) {
+      emitGasPuff(target.closest('select') ? 1.35 : 1);
+    }
+  }
+
+  useEffect(() => {
+    if (gasPuffs.length === 0) return;
+    const timeout = window.setTimeout(() => {
+      setGasPuffs((current) => current.slice(-4));
+    }, 3600);
+    return () => window.clearTimeout(timeout);
+  }, [gasPuffs]);
+
   return (
     <>
-      <div className="squid-backdrop" style={{ backgroundImage: `url(${stinkyBackdrop})` }} aria-hidden="true" />
-      <div className="shell">
+      <div className="squid-scene" aria-hidden="true">
+        <div className="squid-photo" style={{ backgroundImage: `url(${stinkyBackdrop})` }} />
+        <div className="water-haze" />
+        <div className="water-caustics" />
+        <div className="bubble-field">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="ink-gas-layer">
+          {gasPuffs.map((puff) => (
+            <span
+              key={puff.id}
+              className="ink-gas-puff"
+              style={
+                {
+                  left: `${puff.x}vw`,
+                  top: `${puff.y}vh`,
+                  width: `${puff.size}px`,
+                  height: `${puff.size}px`,
+                  '--drift-x': `${puff.driftX}px`,
+                  '--drift-y': `${puff.driftY}px`,
+                  animationDelay: `${puff.delayMs}ms`,
+                } as CSSProperties
+              }
+            />
+          ))}
+        </div>
+      </div>
+      <div
+        className="shell"
+        onClickCapture={(event) => maybeEmitActionGas(event.target)}
+        onChangeCapture={(event) => maybeEmitActionGas(event.target)}
+      >
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
           <span className="brand-mark">
