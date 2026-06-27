@@ -8,7 +8,7 @@ Last updated: 2026-06-27
 - Current branch is `main`.
 - GitHub remote is `git@github.com:botaniclestest/Sui-Ika-Multichain.git`.
 - Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends`.
-- This handoff records the subsequent testnet package upgrade, deployment metadata update, Sui Vault direct-send warning cleanup, and squid backdrop updates.
+- This handoff records the subsequent testnet package upgrade, deployment metadata update, Sui Vault direct-send warning cleanup, and squid backdrop rollback.
 - Sui CLI active environment is currently `testnet`.
 - Local preview should be opened from Windows/Chrome at `http://localhost:4173/`.
 - Preview process details at handoff:
@@ -49,12 +49,9 @@ Last updated: 2026-06-27
   - The Sui Vault wallet object ID has an inline red flag: `DO NOT SEND DIRECTLY TO THIS ADDRESS. USE DEPOSIT TO VAULT FUNCTION BELOW.`
   - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
 - Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
-- Replaced the uploaded `stINKy.jpg` backdrop with a generated underwater squid scene; the old JPG is no longer imported by the web app.
-- Upgraded the backdrop into an animated underwater scene:
-  - The generated squid gently bobs with water shimmer and bubble drift.
-  - Primary actions, danger actions, tabs, wallet links, and selects trigger short green gas puffs behind the UI.
-- Fixed a React dev-mode tab freeze caused by React trying to `JSON.stringify` props/state containing `bigint` values:
-  - `apps/web/src/main.tsx` now installs a BigInt `toJSON` stringifier before rendering.
+- Rolled back the animated/generated squid backdrop and green gas click effects after they made the app feel refresh-prone.
+- Current background is back to the pre-animation `stINKy.jpg` backdrop behind the cards.
+- Retained the React dev-mode BigInt `toJSON` guard so tab switching does not crash when recovered wallet props include `bigint` values.
 - Fixed clean-machine wallet recovery in the Vite dev app:
   - The browser was prebundling `@ika.xyz/sdk` / `@ika.xyz/ika-wasm` into Vite's optimized dependency cache.
   - The generated Ika web loader resolves `dwallet_mpc_wasm_bg.wasm` relative to `import.meta.url`; after prebundling, that relative URL pointed at the cache and the dev server returned `index.html` (`3c 21 64 6f`, `<!do`) instead of WASM.
@@ -193,7 +190,7 @@ Known non-blocking warnings:
 - `contracts/policy_wallet/tests/verify_tests.move`: Move verifier tests, including SPL cases.
 - `deployments.json`: deployment constants consumed by the web app.
 - `contracts/policy_wallet/Published.toml`: Move publication metadata for CLI upgrades.
-- `stINKy.jpg`: legacy uploaded squid artwork; no longer imported by the current web background.
+- `stINKy.jpg`: uploaded squid artwork used as the current web background.
 
 ## Useful Local Commands
 
