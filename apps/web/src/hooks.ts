@@ -16,6 +16,7 @@ import {
   type SuiNetwork,
   type DurableNonce,
   type ChainBalanceRow,
+  assertDestinationPolicy,
   buildBtcSpend,
   buildCreateSpendRequestTx,
   buildEvmTransfer,
@@ -277,11 +278,12 @@ export function useCreateSpend(core: CoreCtx) {
           const btcNet = BTC_NETWORK_FOR[core.network];
           const addr = recovered.addresses.find((a) => a.chainKey === draft.chainKey);
           if (!addr) throw new Error('btc address unknown');
+          destinationBytes = addressToScript(draft.destination, btcNet);
+          assertDestinationPolicy(chain, destinationBytes);
           const [utxos, feeRate] = await Promise.all([
             fetchUtxos(cfg.btcEsploraUrl, addr.address),
             fetchFeeRate(cfg.btcEsploraUrl),
           ]);
-          destinationBytes = addressToScript(draft.destination, btcNet);
           const plan = buildBtcSpend({
             utxos,
             publicKey: dwallet.publicKey,
@@ -307,9 +309,10 @@ export function useCreateSpend(core: CoreCtx) {
           if (!rpc) throw new Error(`no RPC for ${draft.chainKey}`);
           const addr = recovered.addresses.find((a) => a.chainKey === draft.chainKey);
           if (!addr) throw new Error('evm address unknown');
+          destinationBytes = evmAddressBytes(draft.destination);
+          assertDestinationPolicy(chain, destinationBytes);
           const isToken = !!draft.tokenAddress;
           const params = await fetchEvmTxParams(rpc, addr.address, isToken);
-          destinationBytes = evmAddressBytes(draft.destination);
           const plan = isToken
             ? buildErc20Transfer({
                 chainId: chain.evmChainId,
@@ -348,6 +351,7 @@ export function useCreateSpend(core: CoreCtx) {
           // Rent is paid faucet-free by a connected Solana wallet or the
           // local dust-only gas tank (identical on devnet and mainnet).
           destinationBytes = solanaAddressBytes(draft.destination);
+          assertDestinationPolicy(chain, destinationBytes);
           const { resolveSolanaPayer } = await import('./solana-gas');
           const resolved = await resolveSolanaPayer();
           setStatus(

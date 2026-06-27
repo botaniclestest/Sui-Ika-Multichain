@@ -4,6 +4,7 @@ export * from './config.js';
 export * from './chains/index.js';
 export * from './ika/service.js';
 export * from './policy/client.js';
+export * from './policy/destination.js';
 export * from './policy/state.js';
 export * from './recovery/discovery.js';
 export * from './recovery/balances.js';

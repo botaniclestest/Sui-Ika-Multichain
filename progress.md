@@ -54,6 +54,9 @@ Last updated: 2026-06-27
   - CSS-only deep-water backdrop, soft caustics, light shafts, current ribbons, and a subdued squid silhouette.
   - No click handlers, timers, React state updates, or balance-refresh-adjacent effects are attached to the background.
 - Retained the React dev-mode BigInt `toJSON` guard so tab switching does not crash when recovered wallet props include `bigint` values.
+- Added preflight destination policy checks to Send:
+  - Blocklisted destinations and allowlist misses are shown before request creation.
+  - The submit hook also checks policy bytes before Solana durable nonce creation, avoiding nonce-rent side effects for blocked destinations.
 - Fixed clean-machine wallet recovery in the Vite dev app:
   - The browser was prebundling `@ika.xyz/sdk` / `@ika.xyz/ika-wasm` into Vite's optimized dependency cache.
   - The generated Ika web loader resolves `dwallet_mpc_wasm_bg.wasm` relative to `import.meta.url`; after prebundling, that relative URL pointed at the cache and the dev server returned `index.html` (`3c 21 64 6f`, `<!do`) instead of WASM.

@@ -35,6 +35,7 @@ import {
   buildVoteSpendTx,
   bytesToHex,
   chainDescriptor,
+  checkDestinationPolicy,
   checkBtcIntent,
   checkEvmIntent,
   checkSolIntent,
@@ -671,6 +672,28 @@ function AddressBytesTable({
   );
 }
 
+function parseSpendDestinationBytes({
+  value,
+  chainKey,
+  data,
+  core,
+}: {
+  value: string;
+  chainKey: string;
+  data: RecoveredWallet;
+  core: CoreCtx;
+}): Uint8Array {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error('destination is required');
+  const chain = data.state.chains.get(chainKey);
+  if (!chain) throw new Error('select a chain');
+  if (chain.kind === ChainKind.Btc) return addressToScript(trimmed, BTC_NETWORK_FOR[core.network]);
+  if (chain.kind === ChainKind.Evm) return evmAddressBytes(trimmed);
+  if (chain.kind === ChainKind.Solana) return solanaAddressBytes(trimmed);
+  if (chain.kind === ChainKind.SuiVault) return hexToBytes(normalizeSuiAddress(trimmed));
+  return hexToBytes(trimmed);
+}
+
 // === Send ===
 
 function SendTab({
@@ -714,6 +737,16 @@ function SendTab({
           : chain?.kind === ChainKind.Btc
             ? '(Bitcoin address)'
             : '(chain-native address)';
+  const destinationPolicyError = useMemo(() => {
+    if (!chain || !destination.trim()) return null;
+    try {
+      const destinationBytes = parseSpendDestinationBytes({ value: destination, chainKey, data, core });
+      const check = checkDestinationPolicy(chain, destinationBytes);
+      return check.ok ? null : check.message;
+    } catch {
+      return null;
+    }
+  }, [chain, chainKey, core, data, destination]);
 
   if (!isSigner) return <section className="card">Connect as a signer to send.</section>;
   if (data.state.paused) return <section className="card error">Wallet is paused.</section>;
@@ -731,18 +764,26 @@ function SendTab({
         if (destination.startsWith('0x')) {
           throw new Error('Solana destination must be a base58 Solana address, not a 0x Sui/EVM address.');
         }
-        try {
-          solanaAddressBytes(destination);
-        } catch {
+      }
+      let destinationBytes: Uint8Array;
+      try {
+        destinationBytes = parseSpendDestinationBytes({ value: destination, chainKey, data, core });
+      } catch (e) {
+        if (chain.kind === ChainKind.Solana) {
           throw new Error('Invalid Solana destination. Enter a base58 Solana public key.');
         }
+        throw e;
+      }
+      const policyCheck = checkDestinationPolicy(chain, destinationBytes);
+      if (!policyCheck.ok) {
+        throw new Error(policyCheck.message);
       }
       if (chain.kind === ChainKind.SuiVault) {
         const coinType = normalizeSuiCoinType(selectedAsset.assetId);
         const tx = buildCreateVaultSpendRequestTx(core.ids, walletId, {
           chainKey: utf8(chainKey),
           coinTypeBytes: suiCoinTypeBytes(coinType),
-          destination: hexToBytes(destination),
+          destination: destinationBytes,
           amount: amountBase,
         });
         await exec(tx, 'vault spend request');
@@ -816,6 +857,7 @@ function SendTab({
               onChange={(e) => setDestination(e.target.value.trim())}
             />
           </label>
+          {destinationPolicyError && <div className="error small">{destinationPolicyError}</div>}
           <label>
             Amount ({selectedSymbol})
             <input value={amount} onChange={(e) => setAmount(e.target.value.trim())} />
@@ -829,7 +871,7 @@ function SendTab({
           )}
           {status && <div className="progress-line">{status}</div>}
           {err && <div className="error">{err}</div>}
-          <button className="primary" onClick={() => void submit()} disabled={busy || !destination || !amount || !selectedAsset}>
+          <button className="primary" onClick={() => void submit()} disabled={busy || !destination || !amount || !selectedAsset || !!destinationPolicyError}>
             {busy ? 'preparing...' : 'create spend request'}
           </button>
         </div>
