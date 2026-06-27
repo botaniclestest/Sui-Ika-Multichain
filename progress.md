@@ -50,7 +50,9 @@ Last updated: 2026-06-27
   - WAL testnet metadata fallback treats `::wal::WAL` as 9 decimals when Sui RPC returns no coin metadata.
 - Added a generic Sui Vault deposit form in Overview so future SUI/WAL deposits call `vault_deposit<T>` instead of direct-transferring to the wallet object ID.
 - Rolled back the animated/generated squid backdrop and green gas click effects after they made the app feel refresh-prone.
-- Current background is back to the pre-animation `stINKy.jpg` backdrop behind the cards.
+- Replaced the legacy JPG backdrop with a static professional underwater scene:
+  - CSS-only deep-water backdrop, soft caustics, light shafts, current ribbons, and a subdued squid silhouette.
+  - No click handlers, timers, React state updates, or balance-refresh-adjacent effects are attached to the background.
 - Retained the React dev-mode BigInt `toJSON` guard so tab switching does not crash when recovered wallet props include `bigint` values.
 - Fixed clean-machine wallet recovery in the Vite dev app:
   - The browser was prebundling `@ika.xyz/sdk` / `@ika.xyz/ika-wasm` into Vite's optimized dependency cache.
@@ -190,7 +192,7 @@ Known non-blocking warnings:
 - `contracts/policy_wallet/tests/verify_tests.move`: Move verifier tests, including SPL cases.
 - `deployments.json`: deployment constants consumed by the web app.
 - `contracts/policy_wallet/Published.toml`: Move publication metadata for CLI upgrades.
-- `stINKy.jpg`: uploaded squid artwork used as the current web background.
+- `stINKy.jpg`: legacy uploaded squid artwork; not imported by the current web background.
 
 ## Useful Local Commands
 

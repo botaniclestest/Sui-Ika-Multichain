@@ -7,7 +7,6 @@ import { useCore, useMyWallets } from './hooks';
 import { CreateWizard } from './components/CreateWizard';
 import { Dashboard } from './components/Dashboard';
 import stinkySquid from './assets/stinky-squid.svg';
-import stinkyBackdrop from '../../../stINKy.jpg';
 
 type View = { kind: 'list' } | { kind: 'create' } | { kind: 'wallet'; walletId: string };
 
@@ -33,7 +32,20 @@ export default function App() {
 
   return (
     <>
-      <div className="squid-backdrop" style={{ backgroundImage: `url(${stinkyBackdrop})` }} aria-hidden="true" />
+      <div className="ocean-backdrop" aria-hidden="true">
+        <span className="light-shaft light-shaft-a" />
+        <span className="light-shaft light-shaft-b" />
+        <span className="current-ribbon current-ribbon-a" />
+        <span className="current-ribbon current-ribbon-b" />
+        <span className="squid-silhouette">
+          <span className="squid-silhouette-mantle" />
+          <span className="squid-silhouette-head" />
+          <span className="squid-silhouette-tentacle tentacle-a" />
+          <span className="squid-silhouette-tentacle tentacle-b" />
+          <span className="squid-silhouette-tentacle tentacle-c" />
+          <span className="squid-silhouette-tentacle tentacle-d" />
+        </span>
+      </div>
       <div className="shell">
       <header>
         <div className="brand" onClick={() => setView({ kind: 'list' })}>
