@@ -15,6 +15,7 @@ Last updated: 2026-06-27
   - wrapper PID `2915589`: `pnpm --dir apps/web exec vite preview --host 0.0.0.0`
   - Vite PID `2915603`: `vite preview --host 0.0.0.0`
 - Local dev server for the current Windows/WSL workstation verification is running at `http://127.0.0.1:5174/` because `5173` was already occupied.
+- If Windows localhost forwarding does not expose the WSL dev server, use the current WSL network URL shown by Vite, e.g. `http://172.28.129.187:5174/`.
 
 ## What This Project Is
 
@@ -52,6 +53,14 @@ Last updated: 2026-06-27
   - The browser was prebundling `@ika.xyz/sdk` / `@ika.xyz/ika-wasm` into Vite's optimized dependency cache.
   - The generated Ika web loader resolves `dwallet_mpc_wasm_bg.wasm` relative to `import.meta.url`; after prebundling, that relative URL pointed at the cache and the dev server returned `index.html` (`3c 21 64 6f`, `<!do`) instead of WASM.
   - `apps/web/vite.config.ts` now excludes both packages from `optimizeDeps`, so dWallet public-key extraction can load the real WASM and re-derive BTC/EVM/Solana addresses from on-chain dWallet public output again.
+- Fixed the follow-on blank-page crash from Mysten's zklogin Poseidon import:
+  - `@mysten/sui/dist/zklogin/poseidon.mjs` imports named exports from `poseidon-lite`, but Vite was serving raw CommonJS from the transitive package.
+  - `poseidon-lite@0.2.1` is now a direct web dependency and is included in Vite dependency optimization, so the import is rewritten to Vite's CommonJS wrapper.
+- Added Playwright browser testing support for the web app:
+  - `@playwright/test` is a web dev dependency.
+  - `apps/web/playwright.config.ts` starts/reuses Vite on port `5174`.
+  - `apps/web/tests/smoke.spec.ts` catches page/module crashes and verifies the wallet shell renders.
+  - Chromium runtimes and WSL browser system dependencies were installed on this workstation.
 
 ## Sui Vault Direct-Transfer Incident
 
@@ -150,6 +159,10 @@ Last updated: 2026-06-27
   - `pnpm --filter @mythos/web build`: passed and emitted `dist/assets/dwallet_mpc_wasm_bg-*.wasm`.
   - Local Vite dev probe at `http://127.0.0.1:5174/` confirmed the actual served Ika WASM path returns `Content-Type: application/wasm`, `Content-Length: 3439425`, and magic bytes `00 61 73 6d`.
   - Playwright browser-runtime smoke was not run because the local Playwright Chromium executable is not installed on this machine.
+- After the Poseidon/Playwright follow-up:
+  - `pnpm --filter @mythos/web build`: passed.
+  - `pnpm --filter @mythos/web test:e2e`: passed, 1 Chromium smoke test.
+  - Host-side Playwright loaded `http://172.28.129.187:5174/` with no page errors or console errors.
 - `git diff --check origin/main...HEAD`: passed before pushing feature commits.
 - Strict outgoing diff credential-format scan returned no matches before pushing feature commits.
 - Testnet upgrade dry-run first failed because `Published.toml` still pointed at the original package; aligning testnet `published-at` to the previous latest package fixed the package mismatch.

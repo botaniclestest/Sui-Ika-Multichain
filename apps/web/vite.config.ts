@@ -12,6 +12,7 @@ export default defineConfig({
     // @ika.xyz/ika-wasm's web loader resolves its .wasm via import.meta.url.
     // If Vite prebundles it into node_modules/.vite, that URL points at the
     // optimized cache and the dev server serves index.html instead of WASM.
+    include: ['poseidon-lite'],
     exclude: ['@ika.xyz/sdk', '@ika.xyz/ika-wasm'],
   },
   build: {

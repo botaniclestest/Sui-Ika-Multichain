@@ -2,5 +2,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 contracts/policy_wallet/build/
+playwright-report/
+test-results/
+apps/web/playwright-report/
+apps/web/test-results/
 .env
 .env.*
