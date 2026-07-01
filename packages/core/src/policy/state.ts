@@ -2,57 +2,60 @@
  * On-chain state readers. Everything here works against any standard Sui
  * RPC node - no indexer, no custom backend - which is what makes the wallet
  * recoverable when every frontend instance is gone.
+ *
+ * All reads go through the SDK's transport-agnostic core API, so any of
+ * `SuiGrpcClient`, `SuiGraphQLClient` or the legacy `SuiJsonRpcClient`
+ * works (Sui is deprecating JSON-RPC in favor of gRPC/GraphQL).
  */
 
-import type { SuiJsonRpcClient as SuiClient } from '@mysten/sui/jsonRpc';
-import { base64ToBytes, bytesToHex, fromUtf8, toBytes } from '../codec.js';
+import { bytesToHex, toBytes } from '../codec.js';
+import { bcs } from '@mysten/sui/bcs';
+import {
+  asBig,
+  asBytes,
+  bytesToUtf8,
+  getObjectJson,
+  getTableEntryJson,
+  iterateTableJson,
+  retryRpc,
+  tableIdOf,
+  unwrapFields,
+  vecSetContents,
+  type Json,
+  type SuiRpcClient,
+} from '../sui/rpc.js';
 import type {
   AdminProposalState,
+  AssetPolicyState,
   ChainPolicyState,
   PolicyWalletState,
   SpendRequestState,
 } from '../types.js';
 
-type Json = Record<string, unknown>;
-
-function fields(content: unknown): Json {
-  const c = content as { dataType?: string; fields?: Json };
-  if (!c || c.dataType !== 'moveObject' || !c.fields) throw new Error('not a move object');
-  return c.fields;
-}
-
-function tableId(field: unknown): string {
-  const f = (field as Json | undefined)?.fields as Json | undefined;
-  const id = (f?.id as Json | undefined)?.id;
-  if (typeof id !== 'string') throw new Error('not a table field');
-  return id;
-}
-
-function asBytes(v: unknown): Uint8Array {
-  if (typeof v === 'string') return base64ToBytes(v);
-  return Uint8Array.from(v as number[]);
-}
-
-function asBig(v: unknown): bigint {
-  return BigInt(v as string | number);
-}
-
 function vecSetAddresses(v: unknown): string[] {
-  return (((v as Json).fields as Json).contents as string[]) ?? [];
+  return (vecSetContents(v) as string[]) ?? [];
 }
 
 function vecSetBytesHex(v: unknown): string[] {
-  const contents = (((v as Json).fields as Json).contents as unknown[]) ?? [];
-  return contents.map((c) => bytesToHex(asBytes(c)));
+  return vecSetContents(v).map((c) => bytesToHex(asBytes(c)));
+}
+
+/** Object id from a JSON-rendered UID (string or `{ id }`). */
+function uidOf(v: unknown): string {
+  if (typeof v === 'string') return v;
+  const j = unwrapFields(v);
+  const id = j?.id;
+  if (typeof id === 'string') return id;
+  const nested = (id as Json | undefined)?.id;
+  if (typeof nested === 'string') return nested;
+  throw new Error('unrecognized UID shape');
 }
 
 export async function getWalletState(
-  client: SuiClient,
+  client: SuiRpcClient,
   walletId: string,
 ): Promise<PolicyWalletState> {
-  const obj = await client.getObject({ id: walletId, options: { showContent: true } });
-  if (!obj.data) throw new Error(`wallet ${walletId} not found`);
-  const f = fields(obj.data.content);
+  const f = await getObjectJson(client, walletId);
 
   const state: PolicyWalletState = {
     walletId,
@@ -74,28 +77,28 @@ export async function getWalletState(
     addressBook: new Map(),
     chains: new Map(),
     presignPools: new Map(),
+    assetPolicies: new Map(),
   };
 
   // --- dwallets table: curve -> DWalletEntry { cap, dwallet_id } ---
-  const dwalletsTable = tableId(f.dwallets);
-  for await (const entry of iterateDynamicFields(client, dwalletsTable)) {
-    const curve = Number((entry.name as Json).value);
-    const value = (entry.value as Json).fields as Json;
+  const dwalletsTable = tableIdOf(f.dwallets);
+  for await (const entry of iterateTableJson(client, dwalletsTable)) {
+    const curve = Number(entry.name);
+    const value = unwrapFields(entry.value);
     state.dwallets.set(curve, value.dwallet_id as string);
   }
 
   // --- address book: chainKey -> identity bytes ---
-  const abTable = tableId(f.address_book);
-  for await (const entry of iterateDynamicFields(client, abTable)) {
-    const key = fromUtf8(asBytes((entry.name as Json).value));
-    state.addressBook.set(key, asBytes(entry.value));
+  const abTable = tableIdOf(f.address_book);
+  for await (const entry of iterateTableJson(client, abTable)) {
+    state.addressBook.set(bytesToUtf8(entry.name), asBytes(entry.value));
   }
 
   // --- chains: chainKey -> ChainPolicy ---
-  const chainsTable = tableId(f.chains);
-  for await (const entry of iterateDynamicFields(client, chainsTable)) {
-    const key = fromUtf8(asBytes((entry.name as Json).value));
-    const v = (entry.value as Json).fields as Json;
+  const chainsTable = tableIdOf(f.chains);
+  for await (const entry of iterateTableJson(client, chainsTable)) {
+    const key = bytesToUtf8(entry.name);
+    const v = unwrapFields(entry.value);
     const policy: ChainPolicyState = {
       chainKey: key,
       kind: Number(v.kind) as ChainPolicyState['kind'],
@@ -120,41 +123,71 @@ export async function getWalletState(
   }
 
   // --- presign pools: {curve, alg} -> caps (pool order) ---
-  const presignTable = tableId(f.presigns);
-  for await (const entry of iterateDynamicFields(client, presignTable)) {
-    const rawName = (entry.name as Json).value as Json;
-    // struct-typed dynamic field names arrive as { type, fields: {...} }
-    const kv = ((rawName.fields ?? rawName) as Json);
+  const presignTable = tableIdOf(f.presigns);
+  for await (const entry of iterateTableJson(client, presignTable)) {
+    const kv = unwrapFields(entry.name);
     const key = `${kv.curve}:${kv.signature_algorithm}`;
-    const caps = (entry.value as unknown[]).map((cap) => {
-      const cf = (cap as Json).fields as Json;
+    const caps = ((entry.value as unknown[]) ?? []).map((cap) => {
+      const cf = unwrapFields(cap);
       return {
-        capId: ((cf.id as Json).id as string),
+        capId: uidOf(cf.id),
         presignId: cf.presign_id as string,
       };
     });
     state.presignPools.set(key, caps);
   }
 
+  // --- per-asset limit overrides: dynamic fields on the wallet UID ---
+  // (AssetPolicyKey { chain_key, asset } -> AssetPolicy). Tables live in
+  // their own child objects, so the wallet UID's direct dynamic fields are
+  // exactly the asset policies.
+  try {
+    for await (const entry of iterateWalletAssetPolicies(client, walletId)) {
+      state.assetPolicies.set(assetPolicyMapKey(entry.chainKey, entry.assetHex), entry);
+    }
+  } catch {
+    // pre-upgrade packages have no asset policies; ignore
+  }
+
   return state;
 }
 
-/** Iterates a Table's dynamic fields, resolving each field's value object. */
-async function* iterateDynamicFields(
-  client: SuiClient,
-  parentId: string,
-): AsyncGenerator<{ name: unknown; value: unknown }> {
-  let cursor: string | null | undefined = undefined;
+export function assetPolicyMapKey(chainKey: string, assetHex: string): string {
+  return `${chainKey}:${assetHex}`;
+}
+
+async function* iterateWalletAssetPolicies(
+  client: SuiRpcClient,
+  walletId: string,
+): AsyncGenerator<AssetPolicyState> {
+  let cursor: string | null = null;
   for (;;) {
-    const page = await client.getDynamicFields({ parentId, cursor: cursor ?? undefined });
-    for (const info of page.data) {
-      const obj = await client.getDynamicFieldObject({ parentId, name: info.name });
-      if (!obj.data?.content) continue;
-      const f = fields(obj.data.content);
-      yield { name: { value: f.name }, value: f.value };
+    const page = await retryRpc(() =>
+      client.core.listDynamicFields({ parentId: walletId, cursor: cursor ?? undefined }),
+    );
+    for (const df of page.dynamicFields) {
+      if (!df.name.type.endsWith('::policy_wallet::AssetPolicyKey')) continue;
+      let fieldJson: Json;
+      try {
+        fieldJson = await getObjectJson(client, df.fieldId);
+      } catch {
+        continue;
+      }
+      const name = unwrapFields(fieldJson.name);
+      const v = unwrapFields(fieldJson.value);
+      yield {
+        chainKey: bytesToUtf8(name.chain_key),
+        assetHex: bytesToHex(asBytes(name.asset)),
+        fastPathLimit: asBig(v.fast_path_limit),
+        perTxLimit: asBig(v.per_tx_limit),
+        windowLimit: asBig(v.window_limit),
+        windowMs: asBig(v.window_ms),
+        spentInWindow: asBig(v.spent_in_window),
+        windowStartedAtMs: asBig(v.window_started_at_ms),
+      };
     }
-    if (!page.hasNextPage || !page.nextCursor) return;
-    cursor = page.nextCursor;
+    if (!page.hasNextPage || !page.cursor) return;
+    cursor = page.cursor;
   }
 }
 
@@ -163,7 +196,7 @@ function parseRequest(v: Json): SpendRequestState {
   return {
     id: asBig(f.id),
     creator: f.creator as string,
-    chainKey: fromUtf8(asBytes(f.chain_key)),
+    chainKey: bytesToUtf8(f.chain_key),
     asset: asBytes(f.asset),
     destination: asBytes(f.destination),
     amount: asBig(f.amount),
@@ -171,7 +204,7 @@ function parseRequest(v: Json): SpendRequestState {
     messages: (f.messages as unknown[]).map(asBytes),
     aux: ((f.aux as unknown[]) ?? []).map(asBytes),
     partialSigIds: ((f.partial_sig_caps as unknown[]) ?? []).map(
-      (cap) => (((cap as Json).fields as Json).partial_centralized_signed_message_id as string),
+      (cap) => unwrapFields(cap).partial_centralized_signed_message_id as string,
     ),
     curve: Number(f.curve),
     signatureAlgorithm: Number(f.signature_algorithm),
@@ -186,32 +219,31 @@ function parseRequest(v: Json): SpendRequestState {
 }
 
 export async function getSpendRequest(
-  client: SuiClient,
+  client: SuiRpcClient,
   walletId: string,
   requestId: bigint,
 ): Promise<SpendRequestState> {
-  const obj = await client.getObject({ id: walletId, options: { showContent: true } });
-  const f = fields(obj.data?.content);
-  const requestsTable = tableId(f.requests);
-  const field = await client.getDynamicFieldObject({
-    parentId: requestsTable,
-    name: { type: 'u64', value: requestId.toString() },
-  });
-  if (!field.data?.content) throw new Error(`request ${requestId} not found`);
-  const ff = fields(field.data.content);
-  return parseRequest((ff.value as Json).fields as Json);
+  const f = await getObjectJson(client, walletId);
+  const requestsTable = tableIdOf(f.requests);
+  const entry = await getTableEntryJson(
+    client,
+    requestsTable,
+    'u64',
+    bcs.u64().serialize(requestId).toBytes(),
+  );
+  if (!entry) throw new Error(`request ${requestId} not found`);
+  return parseRequest(unwrapFields(entry.value));
 }
 
 export async function listSpendRequests(
-  client: SuiClient,
+  client: SuiRpcClient,
   walletId: string,
 ): Promise<SpendRequestState[]> {
-  const obj = await client.getObject({ id: walletId, options: { showContent: true } });
-  const f = fields(obj.data?.content);
-  const requestsTable = tableId(f.requests);
+  const f = await getObjectJson(client, walletId);
+  const requestsTable = tableIdOf(f.requests);
   const out: SpendRequestState[] = [];
-  for await (const entry of iterateDynamicFields(client, requestsTable)) {
-    out.push(parseRequest((entry.value as Json).fields as Json));
+  for await (const entry of iterateTableJson(client, requestsTable)) {
+    out.push(parseRequest(unwrapFields(entry.value)));
   }
   return out.sort((a, b) => (a.id < b.id ? -1 : 1));
 }
@@ -222,7 +254,7 @@ function parseProposal(f: Json): AdminProposalState {
     id: asBig(f.id),
     creator: f.creator as string,
     action: Number(f.action) as AdminProposalState['action'],
-    chainKey: fromUtf8(asBytes(f.chain_key)),
+    chainKey: bytesToUtf8(f.chain_key),
     addrParam: addr ?? null,
     bytesParam: asBytes(f.bytes_param),
     uParams: (f.u_params as unknown[]).map(asBig),
@@ -236,15 +268,14 @@ function parseProposal(f: Json): AdminProposalState {
 }
 
 export async function listProposals(
-  client: SuiClient,
+  client: SuiRpcClient,
   walletId: string,
 ): Promise<AdminProposalState[]> {
-  const obj = await client.getObject({ id: walletId, options: { showContent: true } });
-  const f = fields(obj.data?.content);
-  const proposalsTable = tableId(f.proposals);
+  const f = await getObjectJson(client, walletId);
+  const proposalsTable = tableIdOf(f.proposals);
   const out: AdminProposalState[] = [];
-  for await (const entry of iterateDynamicFields(client, proposalsTable)) {
-    out.push(parseProposal((entry.value as Json).fields as Json));
+  for await (const entry of iterateTableJson(client, proposalsTable)) {
+    out.push(parseProposal(unwrapFields(entry.value)));
   }
   return out.sort((a, b) => (a.id < b.id ? -1 : 1));
 }
@@ -257,17 +288,15 @@ export interface SuiVaultBalance {
 }
 
 export async function getVaultBalances(
-  client: SuiClient,
+  client: SuiRpcClient,
   walletId: string,
 ): Promise<SuiVaultBalance[]> {
-  const obj = await client.getObject({ id: walletId, options: { showContent: true } });
-  if (!obj.data) throw new Error(`wallet ${walletId} not found`);
-  const f = fields(obj.data.content);
-  const vaultId = tableId(f.vault);
+  const f = await getObjectJson(client, walletId);
+  const vaultId = tableIdOf(f.vault);
   const out: SuiVaultBalance[] = [];
-  for await (const entry of iterateDynamicFields(client, vaultId)) {
+  for await (const entry of iterateTableJson(client, vaultId)) {
     out.push({
-      coinType: normalizeSuiTypeName(dynamicFieldNameToString((entry.name as Json).value)),
+      coinType: normalizeSuiTypeName(dynamicFieldNameToString(entry.name)),
       amount: dynamicFieldBalanceValue(entry.value),
     });
   }
@@ -278,13 +307,13 @@ function dynamicFieldNameToString(name: unknown): string {
   if (typeof name === 'string') {
     if (name.includes('::')) return name;
     try {
-      return fromUtf8(base64ToBytes(name));
+      return bytesToUtf8(name);
     } catch {
       return name;
     }
   }
-  if (Array.isArray(name)) return fromUtf8(Uint8Array.from(name as number[]));
-  const f = (name as Json | undefined)?.fields as Json | undefined;
+  if (Array.isArray(name)) return bytesToUtf8(name);
+  const f = unwrapFields(name) as Json | undefined;
   const nested = (f?.name ?? f?.value) as unknown;
   if (nested !== undefined) return dynamicFieldNameToString(nested);
   throw new Error('unsupported vault coin type key');
@@ -292,7 +321,7 @@ function dynamicFieldNameToString(name: unknown): string {
 
 function dynamicFieldBalanceValue(value: unknown): bigint {
   if (typeof value === 'string' || typeof value === 'number') return asBig(value);
-  const f = (value as Json | undefined)?.fields as Json | undefined;
+  const f = unwrapFields(value) as Json | undefined;
   const nested = f?.value ?? (value as Json | undefined)?.value;
   if (nested === undefined) throw new Error('unsupported vault balance value');
   return dynamicFieldBalanceValue(nested);

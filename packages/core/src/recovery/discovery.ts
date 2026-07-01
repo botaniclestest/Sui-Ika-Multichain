@@ -9,18 +9,27 @@
  * requests - then keep approving and spending from a brand new client.
  *
  * Discovery sources (all on-chain, all redundant):
- *   a. owned SignerCap objects        (getOwnedObjects by struct type)
+ *   a. owned SignerCap objects        (listOwnedObjects by struct type)
  *   b. the shared Registry table      (signer address -> wallet ids)
- *   c. WalletCreated/SignerAdded events (fallback scan)
+ *   c. WalletCreated events           (GraphQL fallback scan)
  */
 
-import type { SuiJsonRpcClient as SuiClient } from '@mysten/sui/jsonRpc';
 import { bytesEqual, bytesToHex } from '../codec.js';
+import type { SuiClientTypes } from '@mysten/sui/client';
 import { deriveBtcAddress, p2wpkhScript, type BtcNetwork } from '../chains/btc.js';
 import { deriveEvmAddress, evmAddressBytes } from '../chains/evm.js';
 import { deriveSolanaAddress } from '../chains/solana.js';
 import { IkaService } from '../ika/service.js';
 import { getWalletState, listProposals, listSpendRequests } from '../policy/state.js';
+import {
+  getDynamicFieldBcs,
+  getObjectJson,
+  queryEventsJsonViaGraphql,
+  retryRpc,
+  tableIdOf,
+  type SuiRpcClient,
+} from '../sui/rpc.js';
+import { bcs } from '@mysten/sui/bcs';
 import { ChainKind, IkaCurve } from '../types.js';
 import type { PolicyWalletState, SpendRequestState, AdminProposalState } from '../types.js';
 
@@ -44,65 +53,64 @@ export interface RecoveredWallet {
 
 /** All wallet ids a signer belongs to, from caps + registry union. */
 export async function discoverWallets(
-  client: SuiClient,
+  client: SuiRpcClient,
   packageId: string,
   registryId: string,
   signerAddress: string,
+  /** GraphQL endpoint for the event-scan fallback (optional). */
+  graphqlUrl?: string,
 ): Promise<string[]> {
   const found = new Set<string>();
 
   // a. SignerCap objects
-  let cursor: string | null | undefined = undefined;
+  let cursor: string | null = null;
   for (;;) {
-    const page = await client.getOwnedObjects({
-      owner: signerAddress,
-      filter: { StructType: `${packageId}::policy_wallet::SignerCap` },
-      options: { showContent: true },
-      cursor: cursor ?? undefined,
-    });
-    for (const obj of page.data) {
-      const content = obj.data?.content;
-      if (content?.dataType === 'moveObject') {
-        const f = content.fields as { wallet_id: string };
-        found.add(f.wallet_id);
-      }
+    const page: SuiClientTypes.ListOwnedObjectsResponse<{ json: true }> = await retryRpc(() =>
+      client.core.listOwnedObjects({
+        owner: signerAddress,
+        type: `${packageId}::policy_wallet::SignerCap`,
+        include: { json: true },
+        cursor: cursor ?? undefined,
+      }),
+    );
+    for (const obj of page.objects) {
+      const walletId = (obj.json as { wallet_id?: string } | null)?.wallet_id;
+      if (walletId) found.add(walletId);
     }
-    if (!page.hasNextPage || !page.nextCursor) break;
-    cursor = page.nextCursor;
+    if (!page.hasNextPage || !page.cursor) break;
+    cursor = page.cursor;
   }
 
   // b. Registry table lookup
   try {
-    const regObj = await client.getObject({ id: registryId, options: { showContent: true } });
-    const content = regObj.data?.content;
-    if (content?.dataType === 'moveObject') {
-      const f = content.fields as { wallets_by_signer: { fields: { id: { id: string } } } };
-      const tableId = f.wallets_by_signer.fields.id.id;
-      const entry = await client.getDynamicFieldObject({
-        parentId: tableId,
-        name: { type: 'address', value: signerAddress },
-      });
-      const entryContent = entry.data?.content;
-      if (entryContent?.dataType === 'moveObject') {
-        const value = (entryContent.fields as { value: string[] }).value;
-        for (const id of value ?? []) found.add(id);
-      }
+    const regJson = await getObjectJson(client, registryId);
+    const tableId = tableIdOf(regJson.wallets_by_signer);
+    const valueBcs = await getDynamicFieldBcs(
+      client,
+      tableId,
+      'address',
+      bcs.Address.serialize(signerAddress).toBytes(),
+    );
+    if (valueBcs) {
+      const ids = bcs.vector(bcs.Address).parse(valueBcs);
+      for (const id of ids) found.add(id);
     }
   } catch {
     // registry unreachable - SignerCaps and events still work
   }
 
-  // c. event fallback (only if nothing found - slow path)
-  if (found.size === 0) {
+  // c. event fallback (only if nothing found - slow path, GraphQL only)
+  if (found.size === 0 && graphqlUrl) {
     try {
-      const events = await client.queryEvents({
-        query: { MoveEventType: `${packageId}::events::WalletCreated` },
-        limit: 1000,
-        order: 'descending',
-      });
-      for (const ev of events.data) {
-        const parsed = ev.parsedJson as { wallet_id: string; signers: string[] };
-        if (parsed.signers?.includes(signerAddress)) found.add(parsed.wallet_id);
+      const events = await queryEventsJsonViaGraphql(
+        graphqlUrl,
+        `${packageId}::events::WalletCreated`,
+        200,
+      );
+      for (const parsed of events as { wallet_id?: string; signers?: string[] }[]) {
+        if (parsed.wallet_id && parsed.signers?.includes(signerAddress)) {
+          found.add(parsed.wallet_id);
+        }
       }
     } catch {
       // best-effort
@@ -117,7 +125,7 @@ export async function discoverWallets(
  * the Ika dWallet public outputs (source of truth), pending work.
  */
 export async function recoverWallet(
-  client: SuiClient,
+  client: SuiRpcClient,
   ika: IkaService,
   walletId: string,
   btcNetwork: BtcNetwork,

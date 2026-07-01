@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
@@ -56,25 +56,27 @@ const keypair =
     : Ed25519Keypair.fromSecretKey(parsed.secretKey);
 const me = keypair.getPublicKey().toSuiAddress();
 
-const sui = new SuiJsonRpcClient({
-  url: 'https://fullnode.testnet.sui.io:443',
+// Sui fullnode over gRPC (JSON-RPC is deprecated).
+const sui = new SuiGrpcClient({
+  baseUrl: 'https://fullnode.testnet.sui.io:443',
   network: 'testnet',
 });
-const ika = new IkaService(sui as never, 'testnet');
+const ika = new IkaService(sui, 'testnet');
 
 async function exec(tx: Transaction, label: string) {
   tx.setSender(me);
   const result = await sui.signAndExecuteTransaction({
     signer: keypair,
     transaction: tx,
-    options: { showEffects: true },
+    include: { effects: true },
   });
-  if (result.effects?.status?.status !== 'success') {
-    throw new Error(`${label} failed: ${JSON.stringify(result.effects?.status)}`);
+  const txn = result.Transaction ?? result.FailedTransaction;
+  if (!txn || !txn.status.success) {
+    throw new Error(`${label} failed: ${JSON.stringify(txn?.status.error ?? 'unknown')}`);
   }
-  await sui.waitForTransaction({ digest: result.digest });
-  console.log(`ok: ${label} (${result.digest})`);
-  return result;
+  await sui.waitForTransaction({ digest: txn.digest });
+  console.log(`ok: ${label} (${txn.digest})`);
+  return txn;
 }
 
 /** Wizard default limits, scaled to the chain's decimals. */
@@ -99,7 +101,7 @@ async function main() {
     ikaCoinType: ika.ikaCoinType,
   };
 
-  let state = await getWalletState(sui as never, walletId!);
+  let state = await getWalletState(sui, walletId!);
   if (state.setupComplete) {
     console.log('setup already complete; nothing to do.');
     return;
@@ -132,7 +134,7 @@ async function main() {
   }
 
   // 2. wait for dWallets, derive identities
-  state = await getWalletState(sui as never, walletId!);
+  state = await getWalletState(sui, walletId!);
   const secpId = state.dwallets.get(IkaCurve.Secp256k1)!;
   console.log('waiting for secp256k1 dWallet Active...');
   const secp = await ika.getActiveDWallet(secpId);

@@ -12,7 +12,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
@@ -37,16 +37,23 @@ const keypair =
     : Ed25519Keypair.fromSecretKey(parsed.secretKey);
 const me = keypair.getPublicKey().toSuiAddress();
 
+// Sui fullnode over gRPC (JSON-RPC is deprecated).
 const rpc =
   network === 'mainnet'
     ? 'https://fullnode.mainnet.sui.io:443'
     : 'https://fullnode.testnet.sui.io:443';
-const sui = new SuiJsonRpcClient({ url: rpc, network });
-const ika = new IkaService(sui as never, network);
+const sui = new SuiGrpcClient({ baseUrl: rpc, network });
+const ika = new IkaService(sui, network);
 
 async function main() {
   console.log(`recovering as ${me} on ${network}\n`);
-  const wallets = await discoverWallets(sui as never, dep.policyPackageId, dep.registryId, me);
+  const wallets = await discoverWallets(
+    sui,
+    dep.policyPackageId,
+    dep.registryId,
+    me,
+    `https://graphql.${network}.sui.io/graphql`,
+  );
   if (wallets.length === 0) {
     console.log('no wallets found for this signer.');
     return;
@@ -54,7 +61,7 @@ async function main() {
 
   for (const walletId of wallets) {
     console.log(`=== wallet ${walletId} ===`);
-    const r = await recoverWallet(sui as never, ika, walletId, network === 'mainnet' ? 'mainnet' : 'testnet');
+    const r = await recoverWallet(sui, ika, walletId, network === 'mainnet' ? 'mainnet' : 'testnet');
     console.log(`signers (${r.state.threshold}-of-${r.state.signers.length}, admin ${r.state.adminThreshold}):`);
     for (const s of r.state.signers) console.log(`  ${s}${s === me ? '  <- you' : ''}`);
     console.log(`paused: ${r.state.paused}  setup complete: ${r.state.setupComplete}`);

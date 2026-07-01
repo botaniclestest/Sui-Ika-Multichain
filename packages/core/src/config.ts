@@ -19,7 +19,14 @@ export interface KnownEvmToken {
 
 export interface MythosNetworkConfig {
   network: SuiNetwork;
+  /**
+   * Sui fullnode endpoint. Served over gRPC(-Web) by the SDK's
+   * `SuiGrpcClient` (Sui is deprecating JSON-RPC; the same host serves
+   * both, so older JSON-RPC clients keep working during migration).
+   */
   suiRpcUrl: string;
+  /** Sui GraphQL (indexer) endpoint - used for event-history queries. */
+  suiGraphqlUrl: string;
   /** Published policy_wallet package id. */
   policyPackageId: string;
   /** Shared Registry object created on publish. */
@@ -40,6 +47,7 @@ export const DEFAULT_CONFIGS: Record<SuiNetwork, MythosNetworkConfig> = {
   testnet: {
     network: 'testnet',
     suiRpcUrl: 'https://fullnode.testnet.sui.io:443',
+    suiGraphqlUrl: 'https://graphql.testnet.sui.io/graphql',
     policyPackageId: '',
     registryId: '',
     btcEsploraUrl: 'https://blockstream.info/testnet/api',
@@ -53,6 +61,7 @@ export const DEFAULT_CONFIGS: Record<SuiNetwork, MythosNetworkConfig> = {
   mainnet: {
     network: 'mainnet',
     suiRpcUrl: 'https://fullnode.mainnet.sui.io:443',
+    suiGraphqlUrl: 'https://graphql.mainnet.sui.io/graphql',
     policyPackageId: '',
     registryId: '',
     btcEsploraUrl: 'https://blockstream.info/api',

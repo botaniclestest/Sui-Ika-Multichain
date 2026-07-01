@@ -14,7 +14,7 @@
  * here because that same threshold is what executes ANY signature.
  */
 
-import type { SuiJsonRpcClient as SuiClient } from '@mysten/sui/jsonRpc';
+import { getObjectJson, type SuiRpcClient } from '../sui/rpc.js';
 import {
   Curve,
   Hash,
@@ -90,7 +90,7 @@ export class IkaService {
   readonly network: SuiNetwork;
   #initialized = false;
 
-  constructor(suiClient: SuiClient, network: SuiNetwork) {
+  constructor(suiClient: SuiRpcClient, network: SuiNetwork) {
     this.network = network;
     this.ikaClient = new IkaClient({
       suiClient: suiClient as never,
@@ -178,14 +178,13 @@ export class IkaService {
   }
 
   /** Resolves an UnverifiedPresignCap object id -> inner presign session id. */
-  async presignIdFromCap(suiClient: SuiClient, presignCapId: string): Promise<string> {
-    const obj = await suiClient.getObject({ id: presignCapId, options: { showContent: true } });
-    const content = obj.data?.content;
-    if (!content || content.dataType !== 'moveObject') {
+  async presignIdFromCap(suiClient: SuiRpcClient, presignCapId: string): Promise<string> {
+    const json = await getObjectJson(suiClient, presignCapId);
+    const presignId = json.presign_id;
+    if (typeof presignId !== 'string') {
       throw new Error(`presign cap ${presignCapId} not found`);
     }
-    const fields = content.fields as { presign_id: string };
-    return fields.presign_id;
+    return presignId;
   }
 
   /** Waits for a presign to complete and returns its bytes. */

@@ -9,7 +9,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
@@ -38,8 +38,9 @@ const keypair =
     ? Secp256k1Keypair.fromSecretKey(parsed.secretKey)
     : Ed25519Keypair.fromSecretKey(parsed.secretKey);
 
-const sui = new SuiJsonRpcClient({
-  url: 'https://fullnode.testnet.sui.io:443',
+// Sui fullnode over gRPC (JSON-RPC is deprecated).
+const sui = new SuiGrpcClient({
+  baseUrl: 'https://fullnode.testnet.sui.io:443',
   network: 'testnet',
 });
 
@@ -69,23 +70,22 @@ async function main() {
   const result = await sui.signAndExecuteTransaction({
     signer: keypair,
     transaction: tx,
-    options: { showEffects: true, showObjectChanges: true },
+    include: { effects: true },
   });
-  if (result.effects?.status?.status !== 'success') {
-    throw new Error(`upgrade failed: ${JSON.stringify(result.effects?.status)}`);
+  const txn = result.Transaction ?? result.FailedTransaction;
+  if (!txn || !txn.status.success) {
+    throw new Error(`upgrade failed: ${JSON.stringify(txn?.status.error ?? 'unknown')}`);
   }
-  await sui.waitForTransaction({ digest: result.digest });
+  await sui.waitForTransaction({ digest: txn.digest });
 
-  const published = (result.objectChanges ?? []).find(
-    (c) => c.type === 'published',
-  ) as { packageId: string } | undefined;
-  if (!published) throw new Error('no published change in upgrade result');
+  const published = txn.effects?.changedObjects.find((c) => c.outputState === 'PackageWrite');
+  if (!published) throw new Error('no published package in upgrade result');
 
-  deployments.testnet.latestPackageId = published.packageId;
-  deployments.testnet.lastUpgradeDigest = result.digest;
+  deployments.testnet.latestPackageId = published.objectId;
+  deployments.testnet.lastUpgradeDigest = txn.digest;
   writeFileSync(deploymentsPath, JSON.stringify(deployments, null, 2));
 
-  console.log(`upgraded. latest package: ${published.packageId}`);
+  console.log(`upgraded. latest package: ${published.objectId}`);
   console.log(`original (types/events): ${dep.policyPackageId}`);
 }
 

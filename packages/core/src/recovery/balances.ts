@@ -1,5 +1,5 @@
-import type { SuiJsonRpcClient as SuiClient } from '@mysten/sui/jsonRpc';
 import type { MythosNetworkConfig } from '../config.js';
+import type { SuiRpcClient } from '../sui/rpc.js';
 import { fetchBtcBalance } from '../chains/btc.js';
 import { fetchErc20Balance, fetchEvmNativeBalance } from '../chains/evm.js';
 import { fetchSolBalance, fetchSolTokenBalances } from '../chains/solana.js';
@@ -28,7 +28,7 @@ export interface ChainBalanceRow {
 }
 
 export async function fetchRecoveredBalances(params: {
-  suiClient: SuiClient;
+  suiClient: SuiRpcClient;
   recovered: RecoveredWallet;
   config: MythosNetworkConfig;
 }): Promise<ChainBalanceRow[]> {
@@ -250,12 +250,12 @@ function suiVaultDecimals(coinType: string): number {
 }
 
 async function fetchSuiCoinMetadata(
-  client: SuiClient,
+  client: SuiRpcClient,
   coinType: string,
 ): Promise<{ symbol?: string; decimals?: number; name?: string }> {
   const known = knownSuiCoinMetadata(coinType);
   try {
-    const metadata = await client.getCoinMetadata({ coinType });
+    const { coinMetadata: metadata } = await client.core.getCoinMetadata({ coinType });
     return {
       symbol: metadata?.symbol || known.symbol,
       decimals: metadata?.decimals ?? known.decimals,

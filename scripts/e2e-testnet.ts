@@ -21,7 +21,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
@@ -72,25 +72,27 @@ const keypair =
     : Ed25519Keypair.fromSecretKey(parsed.secretKey);
 const me = keypair.getPublicKey().toSuiAddress();
 
-const sui = new SuiJsonRpcClient({
-  url: 'https://fullnode.testnet.sui.io:443',
+// Sui fullnode over gRPC (JSON-RPC is deprecated).
+const sui = new SuiGrpcClient({
+  baseUrl: 'https://fullnode.testnet.sui.io:443',
   network: 'testnet',
 });
-const ika = new IkaService(sui as never, 'testnet');
+const ika = new IkaService(sui, 'testnet');
 
 async function exec(tx: Transaction, label: string) {
   tx.setSender(me);
   const result = await sui.signAndExecuteTransaction({
     signer: keypair,
     transaction: tx,
-    options: { showEffects: true, showObjectChanges: true, showEvents: true },
+    include: { effects: true, objectTypes: true, events: true },
   });
-  if (result.effects?.status?.status !== 'success') {
-    throw new Error(`${label} failed: ${JSON.stringify(result.effects?.status)}`);
+  const txn = result.Transaction ?? result.FailedTransaction;
+  if (!txn || !txn.status.success) {
+    throw new Error(`${label} failed: ${JSON.stringify(txn?.status.error ?? 'unknown')}`);
   }
-  await sui.waitForTransaction({ digest: result.digest });
-  console.log(`ok: ${label} (${result.digest})`);
-  return result;
+  await sui.waitForTransaction({ digest: txn.digest });
+  console.log(`ok: ${label} (${txn.digest})`);
+  return txn;
 }
 
 async function main() {
@@ -124,19 +126,16 @@ async function main() {
     suiBudget: 800_000_000n,
   });
   const createResult = await exec(createTx, 'create_wallet');
-  const walletChange = (createResult.objectChanges ?? []).find(
-    (c) =>
-      c.type === 'created' &&
-      'objectType' in c &&
-      (c as { objectType: string }).objectType.endsWith('::policy_wallet::PolicyWallet'),
-  ) as { objectId: string } | undefined;
-  if (!walletChange) throw new Error('wallet object not found in tx output');
-  walletId = walletChange.objectId;
+  const walletId2 = Object.entries(createResult.objectTypes ?? {}).find(([, type]) =>
+    type.endsWith('::policy_wallet::PolicyWallet'),
+  )?.[0];
+  if (!walletId2) throw new Error('wallet object not found in tx output');
+  walletId = walletId2;
   }
   console.log(`wallet: ${walletId}`);
 
   // wait for the dWallet to activate, derive addresses -------------------
-  const state = await getWalletState(sui as never, walletId);
+  const state = await getWalletState(sui, walletId);
   const dwalletId = state.dwallets.get(IkaCurve.Secp256k1)!;
   console.log(`dwallet: ${dwalletId} (waiting for Active...)`);
   const dwallet = await ika.getActiveDWallet(dwalletId);
@@ -146,7 +145,7 @@ async function main() {
   console.log(`BTC address: ${btcAddress}`);
 
   // 2/3. configure chains + address book (skipped if already finalized) --
-  const preState = await getWalletState(sui as never, walletId);
+  const preState = await getWalletState(sui, walletId);
   if (preState.setupComplete) {
     console.log('setup already finalized; skipping configuration');
   } else {
@@ -220,7 +219,7 @@ async function main() {
   console.log('waiting for presigns to complete...');
   let pool: { capId: string; presignId: string }[] = [];
   for (let i = 0; i < 60; i++) {
-    const s = await getWalletState(sui as never, walletId);
+    const s = await getWalletState(sui, walletId);
     pool = s.presignPools.get('0:0') ?? [];
     if (pool.length >= 1) break;
     await new Promise((r) => setTimeout(r, 3_000));
@@ -275,7 +274,7 @@ async function main() {
   });
   await exec(requestTx, 'create_spend_request (EVM, verified on-chain)');
 
-  const requestId = (await getWalletState(sui as never, walletId)).requestCounter;
+  const requestId = (await getWalletState(sui, walletId)).requestCounter;
   console.log(`request id: ${requestId}`);
 
   // 1-of-1 fast path: creator approval reached threshold at creation.
@@ -287,13 +286,13 @@ async function main() {
 
   console.log('waiting for Ika to verify the locked partial signature...');
   {
-    const pending = await getSpendRequest(sui as never, walletId, requestId);
+    const pending = await getSpendRequest(sui, walletId, requestId);
     for (const id of pending.partialSigIds) {
       await ika.waitForPartialSignatureVerified(id);
     }
   }
   await exec(buildExecuteSpendTx(ids, walletId, requestId), 'execute_spend');
-  const request = await getSpendRequest(sui as never, walletId, requestId);
+  const request = await getSpendRequest(sui, walletId, requestId);
   if (request.signIds.length !== 1) throw new Error('no sign id recorded');
   console.log(`sign session: ${request.signIds[0]}`);
 
@@ -307,9 +306,9 @@ async function main() {
 
   // 6. recovery from scratch ----------------------------------------------
   console.log('\n--- recovery drill (fresh state, registry only) ---');
-  const wallets = await discoverWallets(sui as never, dep.policyPackageId, ids.registryId, me);
+  const wallets = await discoverWallets(sui, dep.policyPackageId, ids.registryId, me);
   console.log(`discovered wallets: ${wallets.join(', ')}`);
-  const recovered = await recoverWallet(sui as never, ika, walletId, 'testnet');
+  const recovered = await recoverWallet(sui, ika, walletId, 'testnet');
   for (const a of recovered.addresses) {
     console.log(`${a.chainKey}: ${a.address} verified=${a.verified}`);
   }

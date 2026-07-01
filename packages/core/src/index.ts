@@ -1,6 +1,7 @@
 export * from './codec.js';
 export * from './types.js';
 export * from './config.js';
+export * from './sui/rpc.js';
 export * from './chains/index.js';
 export * from './ika/service.js';
 export * from './policy/client.js';
