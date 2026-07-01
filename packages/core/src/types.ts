@@ -40,6 +40,9 @@ export const ProposalAction = {
   SetChainEnabled: 13,
   SetAllowlistEnabled: 14,
   SetAllowUnverified: 15,
+  WithdrawReserves: 16,
+  SetAssetLimits: 17,
+  RemoveAssetLimits: 18,
 } as const;
 export type ProposalActionValue = (typeof ProposalAction)[keyof typeof ProposalAction];
 
@@ -72,6 +75,25 @@ export interface ChainPolicyState {
   allowlist: string[]; // hex destinations
   blocklist: string[];
   allowUnverified: boolean;
+}
+
+/**
+ * Per-asset limit override (dynamic field on the wallet object).
+ * Non-native assets (ERC-20 / SPL / non-SUI vault coins) with NO override
+ * are UNLIMITED by design: token base units are incomparable to native
+ * chain units, so they always require the full threshold + spend timelock
+ * until governance sets token-denominated limits.
+ */
+export interface AssetPolicyState {
+  chainKey: string;
+  /** hex of the asset bytes (ERC-20 address / SPL mint / Sui coin type). */
+  assetHex: string;
+  fastPathLimit: bigint;
+  perTxLimit: bigint;
+  windowLimit: bigint;
+  windowMs: bigint;
+  spentInWindow: bigint;
+  windowStartedAtMs: bigint;
 }
 
 export interface SpendRequestState {
@@ -151,6 +173,8 @@ export interface PolicyWalletState {
   chains: Map<string, ChainPolicyState>;
   /** presign pools: `${curve}:${alg}` -> caps in pool order. */
   presignPools: Map<string, PresignPoolEntry[]>;
+  /** per-asset limit overrides: `${chainKey}:${assetHex}` -> policy. */
+  assetPolicies: Map<string, AssetPolicyState>;
 }
 
 /** A spend the user wants to make, before tx construction. */

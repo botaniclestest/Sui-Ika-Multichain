@@ -169,6 +169,22 @@ public struct VaultWithdrawal has copy, drop {
     destination: address,
 }
 
+public struct AssetLimitsSet has copy, drop {
+    wallet_id: ID,
+    chain_key: vector<u8>,
+    asset: vector<u8>,
+    fast_path_limit: u128,
+    per_tx_limit: u128,
+    window_limit: u128,
+    window_ms: u64,
+}
+
+public struct AssetLimitsRemoved has copy, drop {
+    wallet_id: ID,
+    chain_key: vector<u8>,
+    asset: vector<u8>,
+}
+
 // === Emit helpers (package-internal) ===
 
 public(package) fun wallet_created(
@@ -316,4 +332,22 @@ public(package) fun vault_withdrawal(
     destination: address,
 ) {
     event::emit(VaultWithdrawal { wallet_id, request_id, coin_type, amount, destination });
+}
+
+public(package) fun asset_limits_set(
+    wallet_id: ID,
+    chain_key: vector<u8>,
+    asset: vector<u8>,
+    fast_path_limit: u128,
+    per_tx_limit: u128,
+    window_limit: u128,
+    window_ms: u64,
+) {
+    event::emit(AssetLimitsSet {
+        wallet_id, chain_key, asset, fast_path_limit, per_tx_limit, window_limit, window_ms,
+    });
+}
+
+public(package) fun asset_limits_removed(wallet_id: ID, chain_key: vector<u8>, asset: vector<u8>) {
+    event::emit(AssetLimitsRemoved { wallet_id, chain_key, asset });
 }

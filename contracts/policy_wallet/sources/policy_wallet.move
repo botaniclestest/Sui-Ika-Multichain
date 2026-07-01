@@ -51,6 +51,7 @@ use sui::bag::{Self, Bag};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
+use sui::dynamic_field as df;
 use sui::sui::SUI;
 use sui::table::{Self, Table};
 use sui::vec_set::{Self, VecSet};
@@ -151,6 +152,12 @@ const ACTION_SET_ALLOW_UNVERIFIED: u8 = 15;
 /// Withdraw fee reserves (IKA/SUI) to a recipient. Admin-gated escape
 /// hatch so reserves are never permanently stranded in the wallet.
 const ACTION_WITHDRAW_RESERVES: u8 = 16;
+/// Set (or replace) token-denominated limits for a NON-NATIVE asset
+/// (ERC-20 / SPL mint / non-SUI vault coin). `bytes_param` = asset bytes,
+/// `u_params` = [fast_path, per_tx, window_limit, window_ms].
+const ACTION_SET_ASSET_LIMITS: u8 = 17;
+/// Remove a per-asset limit override (asset becomes unlimited again).
+const ACTION_REMOVE_ASSET_LIMITS: u8 = 18;
 
 const U64_MAX: u128 = 18_446_744_073_709_551_615;
 
@@ -274,6 +281,33 @@ public struct AdminProposal has store {
     created_at_ms: u64,
     threshold_reached_at_ms: u64,
     status: u8,
+}
+
+/// Dynamic-field key for a per-asset limit override, attached to the
+/// wallet's UID (added in upgrade; avoids changing shared struct layouts).
+public struct AssetPolicyKey has copy, drop, store {
+    chain_key: vector<u8>,
+    /// ERC-20 contract address bytes / SPL mint bytes / Sui coin type bytes.
+    asset: vector<u8>,
+}
+
+/// Token-denominated limits for one non-native asset on one chain.
+///
+/// A NON-NATIVE asset with NO override is UNLIMITED by design: token base
+/// units are incomparable to native chain units (inheriting e.g. a 0.1 SOL
+/// limit for an SPL token with different decimals/value is meaningless).
+/// Unlimited assets never qualify for the fast path, so they always
+/// require the full signer threshold plus the spend timelock.
+public struct AssetPolicy has copy, drop, store {
+    /// 0 disables the fast path for this asset.
+    fast_path_limit: u128,
+    /// Hard cap per request, in TOKEN base units.
+    per_tx_limit: u128,
+    /// Rolling window cap, in TOKEN base units.
+    window_limit: u128,
+    window_ms: u64,
+    spent_in_window: u128,
+    window_started_at_ms: u64,
 }
 
 // === Wallet creation ===
@@ -681,7 +715,6 @@ public fun create_spend_request(
     let (kind, curve, signature_algorithm, hash_scheme, fee_limit, evm_chain_id) = {
         let chain = wallet.chains.borrow(chain_key);
         assert!(chain.enabled, EChainDisabled);
-        assert!(amount <= chain.per_tx_limit, EOverPerTxLimit);
         assert!(!chain.blocklist.contains(&destination), EDestinationBlocked);
         if (chain.allowlist_enabled) {
             assert!(chain.allowlist.contains(&destination), EDestinationNotAllowed);
@@ -698,6 +731,9 @@ public fun create_spend_request(
             chain.evm_chain_id,
         )
     };
+    // Native assets use the chain limits; tokens use their override when
+    // one exists and are otherwise unlimited (full threshold + timelock).
+    assert_per_tx_limit(wallet, &chain_key, &asset, amount);
 
     // --- intent verification ---
     assert!(kind != KIND_SUI_VAULT, ENotVaultChain);
@@ -819,12 +855,14 @@ public fun create_vault_spend_request(
         let chain = wallet.chains.borrow(chain_key);
         assert!(chain.kind == KIND_SUI_VAULT, ENotVaultKind);
         assert!(chain.enabled, EChainDisabled);
-        assert!(amount <= chain.per_tx_limit, EOverPerTxLimit);
         assert!(!chain.blocklist.contains(&destination), EDestinationBlocked);
         if (chain.allowlist_enabled) {
             assert!(chain.allowlist.contains(&destination), EDestinationNotAllowed);
         };
     };
+    // SUI itself uses the chain limits; other vault coins use their
+    // override when one exists and are otherwise unlimited.
+    assert_per_tx_limit(wallet, &chain_key, &asset, amount);
     assert!(destination.length() == 32, EBadDestination);
 
     let now = clock.timestamp_ms();
@@ -929,11 +967,21 @@ public fun vote_spend(
     let now = clock.timestamp_ms();
     let wallet_id = object::id(wallet);
     let expiry = wallet.request_expiry_ms;
+    let spend_timelock = wallet.timelock_spend_ms;
 
     let (approvals, rejections) = {
         let request = wallet.requests.borrow_mut(request_id);
         assert!(request.status == STATUS_PENDING, ERequestNotPending);
-        if (now > request.created_at_ms + expiry && request.threshold_reached_at_ms == 0) {
+        // Lazy expiry: before the threshold, requests die when the voting
+        // window lapses; after it, when the execution window lapses. This
+        // stops stale requests from collecting votes forever (e.g. from
+        // signers added long after the request became unexecutable).
+        let lapsed = if (request.threshold_reached_at_ms == 0) {
+            now > request.created_at_ms + expiry
+        } else {
+            now > request.threshold_reached_at_ms + spend_timelock + expiry
+        };
+        if (lapsed) {
             request.status = STATUS_EXPIRED;
             events::spend_rejected(wallet_id, request_id);
             return
@@ -953,10 +1001,16 @@ public fun vote_spend(
 
     events::spend_vote_cast(wallet_id, request_id, ctx.sender(), approve, approvals, rejections);
 
-    // Auto-reject when the threshold can no longer be reached.
+    // Auto-reject when the threshold can no longer be reached. Rejections
+    // are recounted against the CURRENT signer set, mirroring how
+    // approvals are recounted at execution.
     let n_signers = wallet.signers.length();
     let required = required_approvals_for(wallet, request_id);
-    if (rejections > n_signers - required) {
+    let valid_rejections = {
+        let request = wallet.requests.borrow(request_id);
+        count_current_signers(wallet, &request.rejections)
+    };
+    if (valid_rejections > n_signers - required) {
         let request = wallet.requests.borrow_mut(request_id);
         request.status = STATUS_REJECTED;
         events::spend_rejected(wallet_id, request_id);
@@ -993,11 +1047,11 @@ public fun execute_spend(
     let wallet_id = object::id(wallet);
 
     // Phase 1: validate and snapshot request data.
-    let (chain_key, amount, curve, signature_algorithm, hash_scheme, messages) =
+    let (chain_key, asset, amount, curve, signature_algorithm, hash_scheme, messages) =
         validate_execution(wallet, request_id, now, false);
 
     // Phase 2: rolling window accounting (state change BEFORE signing).
-    record_window_spend(wallet, &chain_key, amount, now);
+    record_window_spend(wallet, &chain_key, &asset, amount, now);
 
     // Phase 3: extract the locked future-sign capabilities.
     let mut caps: vector<UnverifiedPartialUserSignatureCap> = vector::empty();
@@ -1064,8 +1118,8 @@ public fun execute_vault_spend<T>(
     let now = clock.timestamp_ms();
     let wallet_id = object::id(wallet);
 
-    let (chain_key, amount, _, _, _, _) = validate_execution(wallet, request_id, now, true);
-    record_window_spend(wallet, &chain_key, amount, now);
+    let (chain_key, asset_key, amount, _, _, _, _) = validate_execution(wallet, request_id, now, true);
+    record_window_spend(wallet, &chain_key, &asset_key, amount, now);
 
     let (destination, asset) = {
         let request = wallet.requests.borrow_mut(request_id);
@@ -1119,7 +1173,7 @@ public fun create_proposal(
     ctx: &TxContext,
 ): u64 {
     assert_signer(wallet, ctx);
-    validate_proposal(wallet, action, &chain_key, &addr_param, &u_params);
+    validate_proposal(wallet, action, &chain_key, &addr_param, &bytes_param, &u_params);
 
     wallet.proposal_counter = wallet.proposal_counter + 1;
     let proposal_id = wallet.proposal_counter;
@@ -1168,11 +1222,23 @@ public fun vote_proposal(
     let now = clock.timestamp_ms();
     let wallet_id = object::id(wallet);
     let expiry = wallet.request_expiry_ms;
+    let admin_timelock = wallet.timelock_admin_ms;
 
     let (approvals, rejections) = {
         let proposal = wallet.proposals.borrow_mut(proposal_id);
         assert!(proposal.status == STATUS_PENDING, EProposalNotPending);
-        if (now > proposal.created_at_ms + expiry && proposal.threshold_reached_at_ms == 0) {
+        // Lazy expiry: before the threshold, proposals die when the voting
+        // window lapses; after it, when the execution window (threshold
+        // time + admin timelock + expiry, matching `execute_proposal`)
+        // lapses. Previously a threshold-reached proposal stayed votable
+        // forever, so signers added later could still vote on dead
+        // proposals.
+        let lapsed = if (proposal.threshold_reached_at_ms == 0) {
+            now > proposal.created_at_ms + expiry
+        } else {
+            now > proposal.threshold_reached_at_ms + admin_timelock + expiry
+        };
+        if (lapsed) {
             proposal.status = STATUS_EXPIRED;
             events::proposal_rejected(wallet_id, proposal_id);
             return
@@ -1192,8 +1258,14 @@ public fun vote_proposal(
 
     events::proposal_vote_cast(wallet_id, proposal_id, ctx.sender(), approve, approvals, rejections);
 
+    // Veto: recounted against the CURRENT signer set so removed signers'
+    // rejections stop counting, mirroring approval recounting.
     let n_signers = wallet.signers.length();
-    if (rejections > n_signers - wallet.admin_threshold) {
+    let valid_rejections = {
+        let proposal = wallet.proposals.borrow(proposal_id);
+        count_current_signers(wallet, &proposal.rejections)
+    };
+    if (valid_rejections > n_signers - wallet.admin_threshold) {
         let proposal = wallet.proposals.borrow_mut(proposal_id);
         proposal.status = STATUS_REJECTED;
         events::proposal_rejected(wallet_id, proposal_id);
@@ -1275,6 +1347,46 @@ public fun chain_spent_in_window(wallet: &PolicyWallet, chain_key: vector<u8>): 
     wallet.chains.borrow(chain_key).spent_in_window
 }
 
+/// Whether a per-asset limit override exists for (chain, asset).
+public fun asset_policy_exists(
+    wallet: &PolicyWallet,
+    chain_key: vector<u8>,
+    asset: vector<u8>,
+): bool {
+    has_asset_policy(wallet, &chain_key, &asset)
+}
+
+/// Per-tx limit that applies to (chain, asset). Returns `option::none()`
+/// for non-native assets without an override (unlimited).
+public fun asset_per_tx_limit(
+    wallet: &PolicyWallet,
+    chain_key: vector<u8>,
+    asset: vector<u8>,
+): Option<u128> {
+    let kind = wallet.chains.borrow(chain_key).kind;
+    if (is_native_asset(kind, &asset)) {
+        option::some(wallet.chains.borrow(chain_key).per_tx_limit)
+    } else if (has_asset_policy(wallet, &chain_key, &asset)) {
+        let policy: &AssetPolicy = df::borrow(&wallet.id, asset_policy_key(&chain_key, &asset));
+        option::some(policy.per_tx_limit)
+    } else {
+        option::none()
+    }
+}
+
+public fun asset_spent_in_window(
+    wallet: &PolicyWallet,
+    chain_key: vector<u8>,
+    asset: vector<u8>,
+): u128 {
+    if (has_asset_policy(wallet, &chain_key, &asset)) {
+        let policy: &AssetPolicy = df::borrow(&wallet.id, asset_policy_key(&chain_key, &asset));
+        policy.spent_in_window
+    } else {
+        0
+    }
+}
+
 public fun address_book_entry(wallet: &PolicyWallet, chain_key: vector<u8>): vector<u8> {
     *wallet.address_book.borrow(chain_key)
 }
@@ -1321,16 +1433,76 @@ fun count_current_signers(wallet: &PolicyWallet, set: &VecSet<address>): u64 {
     count
 }
 
+/// The Sui coin type bytes used as the vault chain's NATIVE asset marker.
+fun sui_native_asset_bytes(): vector<u8> {
+    type_name::get<SUI>().into_string().into_bytes()
+}
+
+/// Whether `asset` denotes the chain's native unit. Native assets are
+/// governed by the chain-level limits; everything else is a token.
+fun is_native_asset(kind: u8, asset: &vector<u8>): bool {
+    if (asset.is_empty()) { return true };
+    kind == KIND_SUI_VAULT && *asset == sui_native_asset_bytes()
+}
+
+fun asset_policy_key(chain_key: &vector<u8>, asset: &vector<u8>): AssetPolicyKey {
+    AssetPolicyKey { chain_key: *chain_key, asset: *asset }
+}
+
+fun has_asset_policy(wallet: &PolicyWallet, chain_key: &vector<u8>, asset: &vector<u8>): bool {
+    df::exists_(&wallet.id, asset_policy_key(chain_key, asset))
+}
+
+/// Per-tx limit check: native asset -> chain limit; token with override ->
+/// token limit; token without override -> UNLIMITED (but never fast path,
+/// so full threshold + spend timelock always apply).
+fun assert_per_tx_limit(
+    wallet: &PolicyWallet,
+    chain_key: &vector<u8>,
+    asset: &vector<u8>,
+    amount: u128,
+) {
+    let kind = wallet.chains.borrow(*chain_key).kind;
+    if (is_native_asset(kind, asset)) {
+        let chain = wallet.chains.borrow(*chain_key);
+        assert!(amount <= chain.per_tx_limit, EOverPerTxLimit);
+    } else if (has_asset_policy(wallet, chain_key, asset)) {
+        let policy: &AssetPolicy = df::borrow(&wallet.id, asset_policy_key(chain_key, asset));
+        assert!(amount <= policy.per_tx_limit, EOverPerTxLimit);
+    };
+}
+
+/// The fast-path limit that applies to this (chain, asset) pair.
+/// Tokens without an override return 0 (fast path disabled).
+fun fast_path_limit_for(wallet: &PolicyWallet, chain_key: &vector<u8>, asset: &vector<u8>): u128 {
+    let kind = wallet.chains.borrow(*chain_key).kind;
+    if (is_native_asset(kind, asset)) {
+        wallet.chains.borrow(*chain_key).fast_path_limit
+    } else if (has_asset_policy(wallet, chain_key, asset)) {
+        let policy: &AssetPolicy = df::borrow(&wallet.id, asset_policy_key(chain_key, asset));
+        policy.fast_path_limit
+    } else {
+        0
+    }
+}
+
 /// How many approvals this request needs right now. The fast path (single
-/// approval, no timelock) applies only when ALL of: chain has a fast-path
-/// limit, amount within it, intent verified on-chain, zero rejections.
+/// approval, no timelock) applies only when ALL of: the applicable policy
+/// has a fast-path limit, amount within it, intent verified on-chain,
+/// zero rejections.
 fun is_fast_path(wallet: &PolicyWallet, request_id: u64): bool {
-    let request = wallet.requests.borrow(request_id);
-    let chain = wallet.chains.borrow(request.chain_key);
-    chain.fast_path_limit > 0
-        && request.amount <= chain.fast_path_limit
-        && request.verified_intent
-        && request.rejections.length() == 0
+    let (chain_key, asset, amount, verified, rejections) = {
+        let request = wallet.requests.borrow(request_id);
+        (
+            request.chain_key,
+            request.asset,
+            request.amount,
+            request.verified_intent,
+            request.rejections.length(),
+        )
+    };
+    let limit = fast_path_limit_for(wallet, &chain_key, &asset);
+    limit > 0 && amount <= limit && verified && rejections == 0
 }
 
 fun required_approvals_for(wallet: &PolicyWallet, request_id: u64): u64 {
@@ -1375,30 +1547,30 @@ fun validate_execution(
     request_id: u64,
     now: u64,
     expect_vault: bool,
-): (vector<u8>, u128, u32, u32, u32, vector<vector<u8>>) {
+): (vector<u8>, vector<u8>, u128, u32, u32, u32, vector<vector<u8>>) {
     assert!(wallet.requests.contains(request_id), ERequestNotFound);
-    let request = wallet.requests.borrow(request_id);
-    assert!(request.status == STATUS_PENDING, ERequestNotPending);
+    {
+        let request = wallet.requests.borrow(request_id);
+        assert!(request.status == STATUS_PENDING, ERequestNotPending);
 
-    let chain = wallet.chains.borrow(request.chain_key);
-    assert!(chain.enabled, EChainDisabled);
-    if (expect_vault) {
-        assert!(chain.kind == KIND_SUI_VAULT, ENotVaultKind);
-    } else {
-        assert!(chain.kind != KIND_SUI_VAULT, ENotVaultChain);
+        let chain = wallet.chains.borrow(request.chain_key);
+        assert!(chain.enabled, EChainDisabled);
+        if (expect_vault) {
+            assert!(chain.kind == KIND_SUI_VAULT, ENotVaultKind);
+        } else {
+            assert!(chain.kind != KIND_SUI_VAULT, ENotVaultChain);
+        };
+
+        // Threshold (recounted against the current signer set).
+        let required = required_approvals_for(wallet, request_id);
+        let valid_approvals = count_current_signers(wallet, &request.approvals);
+        assert!(valid_approvals >= required, EThresholdNotReached);
+        assert!(request.threshold_reached_at_ms != 0, EThresholdNotReached);
     };
 
-    // Threshold (recounted against the current signer set).
-    let required = required_approvals_for(wallet, request_id);
-    let valid_approvals = count_current_signers(wallet, &request.approvals);
-    assert!(valid_approvals >= required, EThresholdNotReached);
-    assert!(request.threshold_reached_at_ms != 0, EThresholdNotReached);
-
-    // Timelock + execution window.
-    let fast = chain.fast_path_limit > 0
-        && request.amount <= chain.fast_path_limit
-        && request.verified_intent
-        && request.rejections.length() == 0;
+    // Timelock + execution window (asset-aware fast path).
+    let request = wallet.requests.borrow(request_id);
+    let fast = is_fast_path(wallet, request_id);
     let timelock = if (fast) { 0 } else { wallet.timelock_spend_ms };
     let executable_at = request.threshold_reached_at_ms + timelock;
     assert!(now >= executable_at, ETimelockActive);
@@ -1406,6 +1578,7 @@ fun validate_execution(
 
     (
         request.chain_key,
+        request.asset,
         request.amount,
         request.curve,
         request.signature_algorithm,
@@ -1414,14 +1587,35 @@ fun validate_execution(
     )
 }
 
-fun record_window_spend(wallet: &mut PolicyWallet, chain_key: &vector<u8>, amount: u128, now: u64) {
-    let chain = wallet.chains.borrow_mut(*chain_key);
-    if (now >= chain.window_started_at_ms + chain.window_ms) {
-        chain.spent_in_window = 0;
-        chain.window_started_at_ms = now;
+fun record_window_spend(
+    wallet: &mut PolicyWallet,
+    chain_key: &vector<u8>,
+    asset: &vector<u8>,
+    amount: u128,
+    now: u64,
+) {
+    let kind = wallet.chains.borrow(*chain_key).kind;
+    if (is_native_asset(kind, asset)) {
+        let chain = wallet.chains.borrow_mut(*chain_key);
+        if (now >= chain.window_started_at_ms + chain.window_ms) {
+            chain.spent_in_window = 0;
+            chain.window_started_at_ms = now;
+        };
+        assert!(chain.spent_in_window + amount <= chain.window_limit, EOverWindowLimit);
+        chain.spent_in_window = chain.spent_in_window + amount;
+    } else if (has_asset_policy(wallet, chain_key, asset)) {
+        let policy: &mut AssetPolicy = df::borrow_mut(
+            &mut wallet.id,
+            asset_policy_key(chain_key, asset),
+        );
+        if (now >= policy.window_started_at_ms + policy.window_ms) {
+            policy.spent_in_window = 0;
+            policy.window_started_at_ms = now;
+        };
+        assert!(policy.spent_in_window + amount <= policy.window_limit, EOverWindowLimit);
+        policy.spent_in_window = policy.spent_in_window + amount;
     };
-    assert!(chain.spent_in_window + amount <= chain.window_limit, EOverWindowLimit);
-    chain.spent_in_window = chain.spent_in_window + amount;
+    // Tokens without an override have no window accounting (unlimited).
 }
 
 fun validate_proposal(
@@ -1429,6 +1623,7 @@ fun validate_proposal(
     action: u8,
     chain_key: &vector<u8>,
     addr_param: &Option<address>,
+    bytes_param: &vector<u8>,
     u_params: &vector<u128>,
 ) {
     if (action == ACTION_ADD_SIGNER) {
@@ -1466,6 +1661,22 @@ fun validate_proposal(
     } else if (action == ACTION_WITHDRAW_RESERVES) {
         assert!(addr_param.is_some(), EBadProposal);
         assert!(u_params.length() == 2, EBadProposal);
+    } else if (action == ACTION_SET_ASSET_LIMITS) {
+        assert!(wallet.chains.contains(*chain_key), EChainUnknown);
+        assert!(!bytes_param.is_empty(), EBadProposal);
+        // The chain's native asset is governed by ACTION_SET_CHAIN_LIMITS.
+        let kind = wallet.chains.borrow(*chain_key).kind;
+        assert!(!is_native_asset(kind, bytes_param), EBadProposal);
+        assert!(u_params.length() == 4, EBadProposal);
+        let fast = u_params[0];
+        let per_tx = u_params[1];
+        let window_limit = u_params[2];
+        let window_ms = u_params[3];
+        assert!(per_tx > 0 && fast <= per_tx && window_limit >= per_tx, EBadProposal);
+        assert!(window_ms > 0 && window_ms <= U64_MAX, EBadProposal);
+    } else if (action == ACTION_REMOVE_ASSET_LIMITS) {
+        assert!(wallet.chains.contains(*chain_key), EChainUnknown);
+        assert!(!bytes_param.is_empty(), EBadProposal);
     } else {
         abort EBadProposal
     }
@@ -1588,6 +1799,51 @@ fun apply_proposal(
                 ctx,
             );
             transfer::public_transfer(coin_sui, recipient);
+        };
+    } else if (action == ACTION_SET_ASSET_LIMITS) {
+        // Re-validated here because chain policy may have changed between
+        // proposal creation and execution.
+        assert!(wallet.chains.contains(chain_key), EChainUnknown);
+        assert!(!bytes_param.is_empty(), EBadProposal);
+        let kind = wallet.chains.borrow(chain_key).kind;
+        assert!(!is_native_asset(kind, &bytes_param), EBadProposal);
+        let fast = u_params[0];
+        let per_tx = u_params[1];
+        let window_limit = u_params[2];
+        let window_ms = u_params[3];
+        assert!(per_tx > 0 && fast <= per_tx && window_limit >= per_tx, EBadChainConfig);
+        assert!(window_ms > 0 && window_ms <= U64_MAX, EBadChainConfig);
+        let key = AssetPolicyKey { chain_key, asset: bytes_param };
+        if (df::exists_(&wallet.id, key)) {
+            let policy: &mut AssetPolicy = df::borrow_mut(&mut wallet.id, key);
+            policy.fast_path_limit = fast;
+            policy.per_tx_limit = per_tx;
+            policy.window_limit = window_limit;
+            policy.window_ms = window_ms as u64;
+        } else {
+            df::add(&mut wallet.id, key, AssetPolicy {
+                fast_path_limit: fast,
+                per_tx_limit: per_tx,
+                window_limit,
+                window_ms: window_ms as u64,
+                spent_in_window: 0,
+                window_started_at_ms: 0,
+            });
+        };
+        events::asset_limits_set(
+            wallet_id,
+            chain_key,
+            bytes_param,
+            fast,
+            per_tx,
+            window_limit,
+            window_ms as u64,
+        );
+    } else if (action == ACTION_REMOVE_ASSET_LIMITS) {
+        let key = AssetPolicyKey { chain_key, asset: bytes_param };
+        if (df::exists_(&wallet.id, key)) {
+            let _removed: AssetPolicy = df::remove(&mut wallet.id, key);
+            events::asset_limits_removed(wallet_id, chain_key, bytes_param);
         };
     } else {
         abort EBadProposal
