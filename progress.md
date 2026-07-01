@@ -1,19 +1,17 @@
 # Progress Handoff
 
-Last updated: 2026-06-27
+Last updated: 2026-07-01
 
 ## Current State
 
 - Product/site name is `stINKy Multichain Policy Wallet`.
-- Current branch is `main`.
+- Current branch is `feat/rpc-migration-and-wallet-hardening` (branched from `main`).
 - GitHub remote is `git@github.com:botaniclestest/Sui-Ika-Multichain.git`.
-- Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends`.
-- This handoff records the subsequent testnet package upgrade, deployment metadata update, Sui Vault direct-send warning cleanup, and squid backdrop rollback.
+- Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends` on `main`.
+- This branch contains: the Sui JSON-RPC -> gRPC/GraphQL migration, per-token spend limits (Move + UI), the governance stale-vote fix (Move + UI), presign management in the Send flow, manual ERC-20 tracking, and clearer Solana wallet transaction messages.
+- IMPORTANT: the Move contract changes (asset limits + vote expiry) require a TESTNET PACKAGE UPGRADE before the new governance actions work on-chain. Until then the UI's "set token limits" proposals will abort with EBadProposal, and stale proposals only get client-side gating. Use `sui move build --dump-bytecode-as-base64` + `scripts/upgrade-testnet.ts` as before, then update `deployments.json` (script does it).
 - Sui CLI active environment is currently `testnet`.
 - Local preview should be opened from Windows/Chrome at `http://localhost:4173/`.
-- Preview process details at handoff:
-  - wrapper PID `2915589`: historical prior preview process
-  - Vite PID `2915603`: historical prior preview process
 - Local dev server for development uses the simple Windows/WSL-friendly bind:
   - `pnpm --filter @mythos/web dev --host 0.0.0.0`
   - Open `http://localhost:5173/` in the Windows browser. Avoid transient WSL IP URLs for normal wallet testing.
@@ -27,6 +25,58 @@ Last updated: 2026-06-27
 - Recovery is intended to be fully on-chain: any signer can rebuild wallets, addresses, policy, requests, proposals, vault balances, and target-chain balances from Sui/RPC state.
 
 ## Completed In This Session
+
+### 1. Sui RPC migration: JSON-RPC -> gRPC (+ GraphQL for events)
+
+- Sui is deprecating JSON-RPC; all Sui reads/writes now go through the SDK's transport-agnostic core API (`client.core.*`), implemented identically by `SuiGrpcClient`, `SuiGraphQLClient`, and the legacy `SuiJsonRpcClient`.
+- New module `packages/core/src/sui/rpc.ts`: `SuiRpcClient` (= `ClientWithCoreApi`), object-JSON readers, Table/Bag iteration via `listDynamicFields` + Field-object JSON, `deriveDynamicFieldID`-based point lookups, BCS dynamic-field reads, transient-429 retry with backoff, and a fetch-based GraphQL event query helper.
+- Rewritten on the core API: `policy/state.ts`, `recovery/discovery.ts`, `recovery/balances.ts`, `ika/service.ts` (the Ika SDK v0.4 already accepts any `ClientWithCoreApi`).
+- Web app (`hooks.ts`, `dapp-kit.ts`) and all scripts (`e2e-testnet`, `finish-setup`, `recover`, `upgrade-testnet`) now construct `SuiGrpcClient` against the same fullnode hosts (they serve both protocols; gRPC-Web CORS on public fullnodes verified as `access-control-allow-origin: *`).
+- The `WalletCreated` event-scan discovery fallback now uses Sui GraphQL (`https://graphql.{testnet,mainnet}.sui.io/graphql`, added to `config.ts` as `suiGraphqlUrl`); the core API has no transport-agnostic event query yet.
+- Verified live against the existing testnet wallet: wallet state, chains, presign pools, requests (list + point lookup), proposals, vault balances, registry discovery, and GraphQL event queries all return correct data over gRPC.
+- Other chains audited for RPC deprecation risk: EVM (ethers `JsonRpcProvider` - EVM JSON-RPC is the standard, publicnode endpoints fine), Solana (`@solana/web3.js` 1.x JSON-RPC - not deprecated; the lib is in maintenance mode, a future `@solana/kit` migration is optional), BTC (Esplora REST on blockstream.info - fine). No changes needed.
+
+### 2. Per-token spend limits (Move + TS + UI) - "start unlimited, tighten later"
+
+- Non-native assets (ERC-20 / SPL mints / non-SUI vault coins) NO LONGER inherit chain-level native limits (which were denominated in native base units and meaningless for tokens).
+- New Move design (dynamic fields on the wallet UID, upgrade-safe):
+  - `AssetPolicyKey { chain_key, asset }` -> `AssetPolicy { fast_path_limit, per_tx_limit, window_limit, window_ms, spent_in_window, window_started_at_ms }` in TOKEN base units.
+  - Default (no override): UNLIMITED amount, but never fast path -> always full signer threshold + spend timelock; no window accounting.
+  - `ACTION_SET_ASSET_LIMITS = 17` (`bytes_param` = asset bytes, `u_params` = [fast, per_tx, window_limit, window_ms]; rejects the chain's native asset) and `ACTION_REMOVE_ASSET_LIMITS = 18` (back to unlimited).
+  - Enforcement is asset-aware in `create_spend_request`, `create_vault_spend_request`, `is_fast_path`, `validate_execution`, and `record_window_spend` (per-asset rolling windows). SUI itself (vault) still uses chain limits.
+  - New events `AssetLimitsSet` / `AssetLimitsRemoved`; new views `asset_policy_exists`, `asset_per_tx_limit`, `asset_spent_in_window`.
+- Frontend: `PolicyWalletState.assetPolicies` (read from wallet-UID dynamic fields), Send tab shows the applicable policy (chain / token override / "unlimited - full threshold + timelock"), Governance tab has "set token limits" / "remove token limits" proposal forms (token decimals input; ERC-20 address / SPL mint / Sui coin type parsing), and proposal cards decode both actions.
+
+### 3. Governance stale-vote bug fixed (Move + UI)
+
+- Root cause: lazy expiry in `vote_proposal`/`vote_spend` only fired when the threshold had NEVER been reached, so a threshold-reached proposal whose execution window had lapsed stayed `PENDING` and votable forever - which is why a signer added later could still vote on the dead thresholds proposal.
+- Fix: voting now lazily expires items whose voting window (pre-threshold) OR execution window (post-threshold: threshold time + timelock + expiry, matching `execute_proposal`/`validate_execution`) has lapsed - the vote marks them `EXPIRED` instead of counting.
+- Veto/auto-reject counting now recounts rejections against the CURRENT signer set (mirrors approval recounting), so signer-set changes cannot silently invalidate or distort vetoes.
+- UI: request and proposal cards compute the same expiry windows, hide approve/veto/execute on expired items, and show an explicit "expired" blocker instead.
+
+### 4. Presigns moved into the Send flow
+
+- The Send tab now shows the presign pool for the selected chain's (curve, algorithm) pair with an inline "+ add presign" button and a warning when the pool is empty (plus a BTC note that each UTXO consumes one presign).
+- The Overview "Operations" card keeps the pool counts as info but no longer hosts the add buttons.
+
+### 5. Manual ERC-20 tracking in the Balances card
+
+- "+ track ERC-20 token" toggle in the Overview Balances card: pick the EVM chain, paste a token contract address; symbol/decimals are read from the contract (`fetchErc20Metadata`, handles string and legacy bytes32 symbols).
+- Tracked tokens persist in localStorage (`mythos-custom-evm-tokens-v1`), merge with the built-in `config.evmTokens` list for balance fetching and the Send asset dropdown, and can be removed. This is deliberate spam filtering: plain EVM RPC cannot enumerate unknown tokens anyway.
+
+### 6. Clearer transaction messages
+
+- The Solana nonce-rent transaction (the only thing Phantom signs) now carries an SPL Memo: "stINKy policy wallet: fund one durable-nonce account (rent ~0.0015 SOL)... moves no other funds", so Phantom shows the purpose in its approval UI.
+- The Send-flow status line now tells the user exactly what their wallet is about to ask (nonce rent approval with amount/source, Sui `create_spend_request` approval).
+
+### Verification (this session)
+
+- `pnpm --filter @mythos/wallet-core typecheck` / `test` (28 tests incl. new rpc-shape tests) / `build`: passed.
+- `pnpm test:move`: passed, 58 tests (10 new: asset-limit lifecycle, per-asset windows, native rejection, unlimited default, stale proposal/request expiry for late voters).
+- `pnpm --filter @mythos/web build`: passed. `pnpm --filter @mythos/web test:e2e`: passed (1 Chromium smoke).
+- Live testnet reads over gRPC verified from Node against wallet `0x7fc8...49d6`.
+
+## Previous Session Notes (2026-06-27)
 
 - Added lightweight green gas background styling and pushed it:
   - `eb7f984 feat(web): add lightweight green gas background`
@@ -91,7 +141,9 @@ Last updated: 2026-06-27
 - Do not use the metadata wrapper type:
   - `0x2::coin::CoinMetadata<...>`
 
-## Token-Specific Limit Plan
+## Token-Specific Limit Plan (IMPLEMENTED 2026-07-01)
+
+- Implemented as designed below; see "Completed In This Session" item 2. Kept for design rationale.
 
 - Current contract limits are per chain: `fast_path_limit`, `per_tx_limit`, `window_limit`, `window_ms`, and `fee_limit` live on `ChainPolicy`.
 - This is too coarse for ERC-20/SPL/Sui Vault tokens because token base units and token values differ from native-chain units.
@@ -210,18 +262,18 @@ Known non-blocking warnings:
 
 ## Remaining Work
 
+- Upgrade the testnet package with this branch's Move changes (asset limits + vote expiry) and update `deployments.json`, then browser-QA:
+  - "set token limits" / "remove token limits" proposals end-to-end (create, vote, execute) for an SPL mint and a vault coin.
+  - Confirm an over-chain-limit token send is now allowed pre-override and blocked post-override.
+  - Confirm the stuck testnet proposal #1 (SET_THRESHOLDS) shows as expired and voting on it marks it EXPIRED on-chain after the upgrade.
+  - Send tab presign panel: counts update after "+ add presign"; empty-pool warning shows.
+  - Track an ERC-20 on Sepolia and confirm its balance row + Send dropdown entry.
+  - Solana send: confirm Phantom shows the new memo text on the nonce-rent transaction.
 - Hard refresh `http://localhost:4173/` before browser QA.
-- Test on testnet:
-  - Sui Vault asset dropdown with SUI/IKA vault balances.
-  - Sui Vault deposit form for SUI and WAL from the connected signer wallet.
-  - Direct-send Sui object-address rows should remain hidden; warning lives next to the Sui Vault object ID.
-  - EVM configured token dropdown entries when token balances exist.
-  - Solana SPL token balance discovery.
-  - Solana SPL spend request creation, vote, timelock, execute, and broadcast.
-- Implement token-specific spend limits via governance using dynamic-field asset policies.
-- Keep transaction history as a plan until token-limit work is settled.
+- Prior testnet QA items still open: Sui Vault deposit form for SUI/WAL, SPL spend lifecycle re-check after upgrade.
+- Keep transaction history as a plan (Sui GraphQL events are now the natural source).
 - Decide whether to expose reserve withdrawal governance (`ACTION_WITHDRAW_RESERVES`) in TypeScript/UI.
-- Before serious mainnet value: audit, UpgradeCap policy, low-limit burn-in, recovery drill from a clean machine, and live Ika support-config checks.
+- Mainnet is NOT upgraded with any of this; before serious mainnet value: audit, UpgradeCap policy, low-limit burn-in, recovery drill from a clean machine, and live Ika support-config checks.
 
 ## Security Notes
 

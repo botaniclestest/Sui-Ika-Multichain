@@ -46,6 +46,17 @@ export interface SolTokenBalance {
 
 export const SPL_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+/** SPL Memo v2: lets wallets (Phantom etc.) show a human-readable purpose. */
+export const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TySNcWxMyWCqXgDLGmfcHr');
+
+/** A no-signer memo instruction; wallets display its text in the approval UI. */
+export function memoInstruction(text: string): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: MEMO_PROGRAM_ID,
+    keys: [],
+    data: new TextEncoder().encode(text) as never,
+  });
+}
 
 // === derivation ===
 
@@ -397,6 +408,11 @@ export async function createDurableNonceAccount(
   rpcUrl: string,
   authority: Uint8Array,
   payer: SolPayer,
+  /**
+   * Optional human-readable memo included in the rent transaction so the
+   * signing wallet (e.g. Phantom) clearly shows what is being approved.
+   */
+  memo?: string,
 ): Promise<DurableNonce> {
   const connection = new Connection(rpcUrl, 'confirmed');
   const nonceAccount = Keypair.generate();
@@ -425,6 +441,7 @@ export async function createDurableNonceAccount(
       lamports: rent,
     }).instructions,
   );
+  if (memo) tx.add(memoInstruction(memo));
   tx.partialSign(nonceAccount);
 
   let sig: string | null = null;

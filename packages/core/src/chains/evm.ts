@@ -179,3 +179,47 @@ export async function fetchErc20Balance(
   });
   return BigInt(result);
 }
+
+/**
+ * Reads an ERC-20's symbol/decimals straight from the contract, so users
+ * can track arbitrary tokens by pasting a contract address (plain JSON-RPC
+ * cannot DISCOVER unknown tokens, but it can read a known one).
+ * Handles both `string` and legacy `bytes32` symbol encodings.
+ */
+export async function fetchErc20Metadata(
+  rpcUrl: string,
+  token: string,
+): Promise<{ symbol: string; decimals: number }> {
+  const provider = evmProvider(rpcUrl);
+  const to = getAddress(token);
+  const [decimalsRaw, symbolRaw] = await Promise.all([
+    provider.call({ to, data: '0x313ce567' }), // decimals()
+    provider.call({ to, data: '0x95d89b41' }).catch(() => '0x'), // symbol()
+  ]);
+  if (!decimalsRaw || decimalsRaw === '0x') {
+    throw new Error('contract did not return decimals(); is this an ERC-20?');
+  }
+  const decimals = Number(BigInt(decimalsRaw));
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+    throw new Error(`implausible ERC-20 decimals: ${decimals}`);
+  }
+  return { symbol: decodeEvmStringResult(symbolRaw) || `${to.slice(0, 6)}…`, decimals };
+}
+
+/** Decodes an ABI `string` or legacy `bytes32` return value. */
+function decodeEvmStringResult(hex: string): string {
+  if (!hex || hex === '0x') return '';
+  const bytes = hexToBytes(hex);
+  let raw: Uint8Array;
+  if (bytes.length === 32) {
+    raw = bytes; // legacy bytes32 symbol
+  } else if (bytes.length >= 64) {
+    let len = 0;
+    for (const b of bytes.slice(32, 64)) len = len * 256 + b;
+    raw = bytes.slice(64, 64 + Math.min(len, 64));
+  } else {
+    raw = bytes;
+  }
+  const text = new TextDecoder().decode(raw).replace(/\u0000+$/g, '').trim();
+  return /^[\x20-\x7e]{1,32}$/.test(text) ? text : '';
+}

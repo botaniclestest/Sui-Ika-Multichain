@@ -1,7 +1,7 @@
 /** Core wiring for the app: clients, ids, recovery, spend flows. */
 
 import { useDAppKit, useCurrentAccount } from '@mysten/dapp-kit-react';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import type { SuiGrpcClient } from '@mysten/sui/grpc';
 import type { Transaction } from '@mysten/sui/transactions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -45,27 +45,23 @@ import {
   curveFromNumber,
 } from '@mythos/wallet-core';
 import { BTC_NETWORK_FOR, getDeployment } from './config';
-
-const RPC = {
-  testnet: 'https://fullnode.testnet.sui.io:443',
-  mainnet: 'https://fullnode.mainnet.sui.io:443',
-} as const;
+import { createSuiClient } from './dapp-kit';
 
 export interface CoreCtx {
   network: SuiNetwork;
-  sui: SuiJsonRpcClient;
+  sui: SuiGrpcClient;
   ika: IkaService;
   ids: PolicyIds | null;
 }
 
-const serviceCache = new Map<string, { sui: SuiJsonRpcClient; ika: IkaService }>();
+const serviceCache = new Map<string, { sui: SuiGrpcClient; ika: IkaService }>();
 
 export function useCore(network: SuiNetwork): CoreCtx {
   const cached = serviceCache.get(network);
   const { sui, ika } = useMemo(() => {
     if (cached) return cached;
-    const sui = new SuiJsonRpcClient({ url: RPC[network], network });
-    const ika = new IkaService(sui as never, network);
+    const sui = createSuiClient(network);
+    const ika = new IkaService(sui, network);
     const entry = { sui, ika };
     serviceCache.set(network, entry);
     return entry;
@@ -117,10 +113,11 @@ export function useMyWallets(core: CoreCtx) {
     setLoading(true);
     try {
       const found = await discoverWallets(
-        core.sui as never,
+        core.sui,
         core.ids.typesPackageId ?? core.ids.packageId,
         core.ids.registryId,
         account.address,
+        resolveConfig(core.network).suiGraphqlUrl,
       );
       setWallets(found);
     } finally {
@@ -148,7 +145,7 @@ export function useRecoveredWallet(core: CoreCtx, walletId: string | null) {
     setError(null);
     try {
       const recovered = await recoverWallet(
-        core.sui as never,
+        core.sui,
         core.ika,
         walletId,
         BTC_NETWORK_FOR[core.network],
@@ -184,10 +181,16 @@ export function useRecoveredBalances(core: CoreCtx, recovered: RecoveredWallet |
     setLoading(true);
     setError(null);
     try {
+      const { loadCustomEvmTokens } = await import('./custom-tokens');
+      const config = resolveConfig(core.network);
       const rows = await fetchRecoveredBalances({
-        suiClient: core.sui as never,
+        suiClient: core.sui,
         recovered,
-        config: resolveConfig(core.network),
+        config: {
+          ...config,
+          // user-tracked ERC-20s (localStorage) extend the built-in list
+          evmTokens: [...(config.evmTokens ?? []), ...loadCustomEvmTokens()],
+        },
       });
       if (gen === generation.current) setBalances(rows);
     } catch (e) {
@@ -257,7 +260,7 @@ export function useCreateSpend(core: CoreCtx) {
           | null = null;
 
         const selectPresigns = async (messageCount: number, loadBytes: boolean) => {
-          const state = await getWalletState(core.sui as never, walletId);
+          const state = await getWalletState(core.sui, walletId);
           const poolKey = `${chain.curve}:${chain.signatureAlgorithm}`;
           const pool = state.presignPools.get(poolKey) ?? [];
           if (pool.length < messageCount) {
@@ -355,12 +358,19 @@ export function useCreateSpend(core: CoreCtx) {
           const { resolveSolanaPayer } = await import('./solana-gas');
           const resolved = await resolveSolanaPayer();
           setStatus(
-            `creating durable nonce account (approve promptly; rent via ${resolved.source}: ${resolved.address.slice(0, 8)}...)`,
+            resolved.source === 'browser-wallet'
+              ? `your Solana wallet will ask you to approve a small "create nonce account" transaction ` +
+                `(~0.0015 SOL rent from ${resolved.address.slice(0, 8)}...). It carries a memo explaining itself. ` +
+                `Approve promptly - it expires in ~60s.`
+              : `creating durable nonce account (rent via local gas tank ${resolved.address.slice(0, 8)}...)`,
           );
           const nonce = await createDurableNonceAccount(
             cfg.solanaRpcUrl,
             dwallet.publicKey,
             resolved.payer,
+            `stINKy policy wallet: fund one durable-nonce account (rent ~0.0015 SOL) so a pending ` +
+              `multisig transfer can be signed later. Nonce authority = the policy wallet; rent is ` +
+              `recoverable by the wallet. This transaction moves no other funds.`,
           );
           createdSolanaNonce = nonce;
           if (draft.tokenAddress && !draft.solanaSourceTokenAccount) {
@@ -424,7 +434,7 @@ export function useCreateSpend(core: CoreCtx) {
           );
         }
 
-        setStatus('submitting request...');
+        setStatus('submitting spend request - approve the create_spend_request transaction in your Sui wallet...');
         const tx = buildCreateSpendRequestTx(core.ids, walletId, {
           chainKey: utf8(draft.chainKey),
           asset: assetBytes,

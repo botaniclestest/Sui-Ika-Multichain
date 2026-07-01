@@ -12,13 +12,16 @@ import {
   ProposalAction,
   RequestStatus,
   type AdminProposalState,
+  type AssetPolicyState,
   type ChainBalanceRow,
+  type KnownEvmToken,
   type RecoveredWallet,
   type SpendRequestState,
   assembleBtcTransaction,
   assembleEvmTransaction,
   assembleSolTransaction,
   addressToScript,
+  assetPolicyMapKey,
   broadcastBtc,
   broadcastEvm,
   broadcastSol,
@@ -43,6 +46,7 @@ import {
   curveFromNumber,
   describeUnverifiedPayload,
   evmAddressBytes,
+  fetchErc20Metadata,
   hexToBytes,
   p2wpkhScript,
   resolveConfig,
@@ -52,6 +56,7 @@ import {
   buildExecuteProposalTx,
 } from '@mythos/wallet-core';
 import { BTC_NETWORK_FOR } from '../config';
+import { addCustomEvmToken, loadCustomEvmTokens, removeCustomEvmToken } from '../custom-tokens';
 import { useCreateSpend, useExec, useRecoveredBalances, useRecoveredWallet, type CoreCtx } from '../hooks';
 
 type BalanceState = ReturnType<typeof useRecoveredBalances>;
@@ -187,6 +192,51 @@ function effectiveWindowRemaining(chain: {
 
 function sameSuiAddress(a: string, b: string): boolean {
   return normalizeSuiAddress(a) === normalizeSuiAddress(b);
+}
+
+/** On-chain asset bytes for a balance row (empty for native assets). */
+function assetBytesForBalanceRow(data: RecoveredWallet, row: ChainBalanceRow): Uint8Array {
+  if (row.assetKind === 'native' || !row.assetId) return new Uint8Array();
+  const chain = data.state.chains.get(row.chainKey);
+  if (!chain) return new Uint8Array();
+  try {
+    if (chain.kind === ChainKind.Evm) return evmAddressBytes(row.assetId);
+    if (chain.kind === ChainKind.Solana) return solanaAddressBytes(row.assetId);
+    if (chain.kind === ChainKind.SuiVault) return suiCoinTypeBytes(row.assetId);
+  } catch {
+    /* fall through */
+  }
+  return new Uint8Array();
+}
+
+type EffectiveLimits =
+  | { kind: 'chain' }
+  | { kind: 'override'; policy: AssetPolicyState }
+  | { kind: 'unlimited' };
+
+/**
+ * Which limits apply to (chain, selected asset): native assets use the
+ * chain policy; tokens use their override when set and are otherwise
+ * unlimited (full threshold + timelock, no fast path).
+ */
+function effectiveAssetLimits(
+  data: RecoveredWallet,
+  chainKey: string,
+  row: ChainBalanceRow | null,
+): EffectiveLimits {
+  const chain = data.state.chains.get(chainKey);
+  if (!chain || !row || row.assetKind === 'native') return { kind: 'chain' };
+  if (chain.kind === ChainKind.SuiVault) {
+    try {
+      if (normalizeSuiCoinType(row.assetId) === '0x2::sui::SUI') return { kind: 'chain' };
+    } catch {
+      /* treat as token */
+    }
+  }
+  const bytes = assetBytesForBalanceRow(data, row);
+  if (bytes.length === 0) return { kind: 'chain' };
+  const policy = data.state.assetPolicies.get(assetPolicyMapKey(chainKey, bytesToHex(bytes)));
+  return policy ? { kind: 'override', policy } : { kind: 'unlimited' };
 }
 
 function containsSuiAddress(addresses: string[], address: string): boolean {
@@ -446,6 +496,7 @@ function Overview({
         <p className="muted">
           Target-chain balances are live RPC reads. Fee reserves below are separate Sui-held IKA/SUI used for Ika operations.
         </p>
+        <TrackErc20Section core={core} data={data} balances={balances} />
       </div>
 
       <div className="card">
@@ -494,6 +545,9 @@ function Overview({
             .map(([k, v]) => `${presignPoolLabel(k)}: ${v.length}`)
             .join(', ') || 'none'}
         </p>
+        <p className="muted small">
+          Presigns are managed on the Send tab: pick a chain there to see its pool and add more.
+        </p>
         {core.ids && (
           <div className="row">
             <button
@@ -505,26 +559,6 @@ function Overview({
             >
               deposit 2 IKA + 0.5 SUI
             </button>
-            <button
-              onClick={() =>
-                act('add presign', () =>
-                  exec(buildAddPresignTx(core.ids!, walletId, 0, 0, 1), 'presign'),
-                )
-              }
-            >
-              + secp256k1 presign
-            </button>
-            {data.state.dwallets.has(2) && (
-              <button
-                onClick={() =>
-                  act('add presign', () =>
-                    exec(buildAddPresignTx(core.ids!, walletId, 2, 0, 1), 'presign'),
-                  )
-                }
-              >
-                + ed25519 presign
-              </button>
-            )}
           </div>
         )}
         {core.ids && (
@@ -552,6 +586,123 @@ function Overview({
         )}
       </div>
     </section>
+  );
+}
+
+// === Track ERC-20 tokens (manual, spam-free by construction) ===
+
+function TrackErc20Section({
+  core,
+  data,
+  balances,
+}: {
+  core: CoreCtx;
+  data: RecoveredWallet;
+  balances: BalanceState;
+}) {
+  const evmChains = [...data.state.chains.values()].filter((c) => c.kind === ChainKind.Evm);
+  const [open, setOpen] = useState(false);
+  const [chainKey, setChainKey] = useState(evmChains[0]?.chainKey ?? '');
+  const [address, setAddress] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [tracked, setTracked] = useState<KnownEvmToken[]>(() => loadCustomEvmTokens());
+
+  if (evmChains.length === 0) return null;
+
+  async function add() {
+    setErr(null);
+    setBusy(true);
+    try {
+      const chain = chainKey || evmChains[0].chainKey;
+      const rpc = resolveConfig(core.network).evmRpcUrls[chain];
+      if (!rpc) throw new Error(`no RPC configured for ${chain}`);
+      const checksummed = getAddress(address.trim());
+      const meta = await fetchErc20Metadata(rpc, checksummed);
+      setTracked(
+        addCustomEvmToken({
+          chainKey: chain,
+          address: checksummed,
+          symbol: meta.symbol,
+          decimals: meta.decimals,
+          name: meta.symbol,
+        }),
+      );
+      setAddress('');
+      await balances.refresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="track-erc20">
+      <button onClick={() => setOpen(!open)}>
+        {open ? '- hide token tracking' : '+ track ERC-20 token'}
+      </button>
+      {open && (
+        <div className="form" style={{ marginTop: 8 }}>
+          <p className="muted small">
+            EVM RPC cannot discover unknown tokens for an address, so paste the token's contract
+            address to show its balance here (this also keeps airdropped spam out). Symbol and
+            decimals are read from the contract.
+          </p>
+          <div className="row wrap">
+            <label>
+              Chain
+              <select value={chainKey} onChange={(e) => setChainKey(e.target.value)}>
+                {evmChains.map((c) => (
+                  <option key={c.chainKey} value={c.chainKey}>
+                    {chainDescriptor(c.chainKey)?.displayName ?? c.chainKey}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Token contract address (0x...)
+              <input value={address} onChange={(e) => setAddress(e.target.value.trim())} />
+            </label>
+            <button className="primary" disabled={busy || !address} onClick={() => void add()}>
+              {busy ? 'checking contract...' : 'add token'}
+            </button>
+          </div>
+          {err && <div className="error small">{err}</div>}
+          {tracked.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th>chain</th><th>token</th><th>contract</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {tracked.map((t) => (
+                  <tr key={`${t.chainKey}:${t.address}`}>
+                    <td>{chainDescriptor(t.chainKey)?.displayName ?? t.chainKey}</td>
+                    <td>{t.symbol} ({t.decimals} dec)</td>
+                    <td className="mono small break">{t.address}</td>
+                    <td>
+                      <button
+                        onClick={() => {
+                          setTracked(removeCustomEvmToken(t.chainKey, t.address));
+                          void balances.refresh();
+                        }}
+                      >
+                        remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="muted small">
+            Tracked tokens with a zero balance stay hidden in the balances table above.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -719,8 +870,33 @@ function SendTab({
   const [destination, setDestination] = useState('');
   const [amount, setAmount] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [presignBusy, setPresignBusy] = useState(false);
+  const [presignErr, setPresignErr] = useState<string | null>(null);
 
   const chain = data.state.chains.get(chainKey);
+  // Presigns are per (curve, signature algorithm); the Sui vault needs none.
+  const presignPoolKey =
+    chain && chain.kind !== ChainKind.SuiVault
+      ? `${chain.curve}:${chain.signatureAlgorithm}`
+      : null;
+  const presignPool = presignPoolKey ? (data.state.presignPools.get(presignPoolKey) ?? []) : null;
+
+  async function addPresign() {
+    if (!chain || !core.ids) return;
+    setPresignErr(null);
+    setPresignBusy(true);
+    try {
+      await exec(
+        buildAddPresignTx(core.ids, walletId, chain.curve, chain.signatureAlgorithm, 1),
+        'add presign',
+      );
+      await onSubmitted();
+    } catch (e) {
+      setPresignErr((e as Error).message);
+    } finally {
+      setPresignBusy(false);
+    }
+  }
   const assetOptions = (balances.balances ?? []).filter(
     (row) => row.chainKey === chainKey && row.status === 'ok' && row.amount !== null,
   );
@@ -862,12 +1038,51 @@ function SendTab({
             Amount ({selectedSymbol})
             <input value={amount} onChange={(e) => setAmount(e.target.value.trim())} />
           </label>
-          {chain && (
-            <p className="muted">
-              policy: per-tx max {fmtUnits(chain.perTxLimit, selectedDecimals)} · fast path&nbsp;
-              {fmtUnits(chain.fastPathLimit, selectedDecimals)} (1 approval, no timelock) · window&nbsp;
-              {fmtUnits(effectiveWindowRemaining(chain), selectedDecimals)} remaining
-            </p>
+          {chain && (() => {
+            const limits = effectiveAssetLimits(data, chainKey, selectedAsset);
+            if (limits.kind === 'override') {
+              const p = limits.policy;
+              return (
+                <p className="muted">
+                  token policy ({selectedSymbol}): per-tx max {fmtUnits(p.perTxLimit, selectedDecimals)} · fast path&nbsp;
+                  {fmtUnits(p.fastPathLimit, selectedDecimals)} (1 approval, no timelock) · window&nbsp;
+                  {fmtUnits(effectiveWindowRemaining(p), selectedDecimals)} remaining
+                </p>
+              );
+            }
+            if (limits.kind === 'unlimited') {
+              return (
+                <p className="muted">
+                  token policy ({selectedSymbol}): no token-specific limits set - amount is unlimited,
+                  but every send needs the full {data.state.threshold.toString()}-signer threshold and the&nbsp;
+                  {fmtDuration(data.state.timelockSpendMs)} spend timelock (no fast path). Set limits via a
+                  "set token limits" proposal on the Governance tab.
+                </p>
+              );
+            }
+            const nativeDecimals = chainDescriptor(chainKey)?.decimals ?? selectedDecimals;
+            return (
+              <p className="muted">
+                policy: per-tx max {fmtUnits(chain.perTxLimit, nativeDecimals)} · fast path&nbsp;
+                {fmtUnits(chain.fastPathLimit, nativeDecimals)} (1 approval, no timelock) · window&nbsp;
+                {fmtUnits(effectiveWindowRemaining(chain), nativeDecimals)} remaining
+              </p>
+            );
+          })()}
+          {presignPool !== null && (
+            <div className={`presign-panel ${presignPool.length === 0 ? 'warning' : ''}`}>
+              <span className="small">
+                presigns for this chain ({presignPoolLabel(presignPoolKey!)}): <strong>{presignPool.length}</strong>
+                {presignPool.length === 0 && ' - you need at least one before creating a spend request'}
+                {chain?.kind === ChainKind.Btc && ' (BTC consumes one per coin/UTXO spent, so keep a few)'}
+              </span>{' '}
+              {core.ids && (
+                <button disabled={presignBusy} onClick={() => void addPresign()}>
+                  {presignBusy ? 'requesting presign...' : '+ add presign'}
+                </button>
+              )}
+              {presignErr && <div className="error small">{presignErr}</div>}
+            </div>
           )}
           {status && <div className="progress-line">{status}</div>}
           {err && <div className="error">{err}</div>}
@@ -948,7 +1163,7 @@ function RequestsTab({
 
     // 2. collect Ika signatures
     const fresh = (await import('@mythos/wallet-core')).getSpendRequest;
-    const updated = await fresh(core.sui as never, walletId, req.id);
+    const updated = await fresh(core.sui, walletId, req.id);
     if (updated.signIds.length === 0) throw new Error('no sign sessions recorded');
     const curve = curveFromNumber(chain.curve);
     const alg = sigAlgFromNumbers(chain.curve, chain.signatureAlgorithm);
@@ -1095,6 +1310,18 @@ function RequestCard({
   const executableAt = reached ? Number(req.thresholdReachedAtMs + data.state.timelockSpendMs) : null;
   const executableNow = !!executableAt && Date.now() >= executableAt;
   const remainingMs = executableAt ? BigInt(Math.max(0, executableAt - Date.now())) : 0n;
+  // Lazy expiry mirror of the contract: no votes/execution on dead requests.
+  const nowMs = BigInt(Date.now());
+  const voteExpiresAtMs = reached ? null : req.createdAtMs + data.state.requestExpiryMs;
+  const execExpiresAtMs = reached
+    ? req.thresholdReachedAtMs + data.state.timelockSpendMs + data.state.requestExpiryMs
+    : null;
+  const expiryBlocker =
+    execExpiresAtMs !== null && nowMs > execExpiresAtMs
+      ? `Execution window expired after ${new Date(Number(execExpiresAtMs)).toLocaleString()}. Create a replacement request.`
+      : voteExpiresAtMs !== null && nowMs > voteExpiresAtMs
+        ? `Voting window expired after ${new Date(Number(voteExpiresAtMs)).toLocaleString()}. Create a replacement request.`
+        : null;
   const decoded = (() => {
     if (chain?.kind === ChainKind.Evm && req.messages[0]) {
       try {
@@ -1134,7 +1361,8 @@ function RequestCard({
           ? `Executable after ${new Date(executableAt).toLocaleString()}${executableNow ? '' : ` (${fmtDuration(remainingMs)} remaining)`}.`
           : 'Starts after the spend threshold is reached.'}
       </p>
-      {isSigner && req.status === RequestStatus.Pending && (
+      {expiryBlocker && <div className="error small">Expired: {expiryBlocker}</div>}
+      {isSigner && req.status === RequestStatus.Pending && !expiryBlocker && (
         <div className="row">
           {!alreadyVoted && (
             <>
@@ -1178,6 +1406,8 @@ const ACTION_LABEL: Record<number, string> = {
   [ProposalAction.SetChainEnabled]: 'enable/disable chain',
   [ProposalAction.SetAllowlistEnabled]: 'toggle allowlist',
   [ProposalAction.SetAllowUnverified]: 'toggle unverified payloads',
+  [ProposalAction.SetAssetLimits]: 'set token limits',
+  [ProposalAction.RemoveAssetLimits]: 'remove token limits',
 };
 
 const CREATE_PROPOSAL_ACTIONS = [
@@ -1187,6 +1417,8 @@ const CREATE_PROPOSAL_ACTIONS = [
   ProposalAction.SetTimelocks,
   ProposalAction.SetExpiry,
   ProposalAction.SetChainLimits,
+  ProposalAction.SetAssetLimits,
+  ProposalAction.RemoveAssetLimits,
   ProposalAction.AllowlistAdd,
   ProposalAction.AllowlistRemove,
   ProposalAction.BlocklistAdd,
@@ -1272,6 +1504,16 @@ function proposalPolicyBlocker(
     if (fast > perTx) return 'Fast-path limit cannot exceed the per-tx limit.';
     if (windowLimit < perTx) return 'Window limit must be at least the per-tx limit.';
     if (windowMs <= 0n || windowMs > U64_MAX) return 'Window length must be greater than 0 and fit in u64.';
+  } else if (proposal.action === ProposalAction.SetAssetLimits) {
+    if (!data.state.chains.has(proposal.chainKey)) return 'Select a configured chain.';
+    if (proposal.uParams.length !== 4) return 'All token limit fields are required.';
+    const [fast, perTx, windowLimit, windowMs] = proposal.uParams;
+    if (perTx <= 0n) return 'Per-tx limit must be greater than 0.';
+    if (fast > perTx) return 'Fast-path limit cannot exceed the per-tx limit.';
+    if (windowLimit < perTx) return 'Window limit must be at least the per-tx limit.';
+    if (windowMs <= 0n || windowMs > U64_MAX) return 'Window length must be greater than 0 and fit in u64.';
+  } else if (proposal.action === ProposalAction.RemoveAssetLimits) {
+    if (!data.state.chains.has(proposal.chainKey)) return 'Select a configured chain.';
   } else if (isChainProposal(proposal.action) && proposal.action !== ProposalAction.SetAddressBook) {
     if (!data.state.chains.has(proposal.chainKey)) return 'Select a configured chain.';
   } else if (proposal.action === ProposalAction.Unpause && !data.state.paused) {
@@ -1329,6 +1571,19 @@ function proposalDetailRows(data: RecoveredWallet, proposal: AdminProposalState)
         { label: 'window length', value: fmtMaybe(proposalUParam(proposal, 3), fmtDuration) },
         { label: 'fee cap', value: fmtMaybe(proposalUParam(proposal, 4), (v) => fmtChainAmount(proposal.chainKey, v)) },
       );
+      break;
+    case ProposalAction.SetAssetLimits:
+      rows.push(...proposalBytesRows(data, proposal, 'token / asset'));
+      rows.push(
+        { label: 'fast path (token base units)', value: fmtMaybe(proposalUParam(proposal, 0), (v) => v.toString()) },
+        { label: 'per-tx limit (token base units)', value: fmtMaybe(proposalUParam(proposal, 1), (v) => v.toString()) },
+        { label: 'window limit (token base units)', value: fmtMaybe(proposalUParam(proposal, 2), (v) => v.toString()) },
+        { label: 'window length', value: fmtMaybe(proposalUParam(proposal, 3), fmtDuration) },
+      );
+      break;
+    case ProposalAction.RemoveAssetLimits:
+      rows.push(...proposalBytesRows(data, proposal, 'remove limits for token / asset'));
+      rows.push({ label: 'effect', value: 'token becomes unlimited again (full threshold + timelock, no fast path)' });
       break;
     case ProposalAction.AllowlistAdd:
       rows.push(...proposalBytesRows(data, proposal, 'allowlist add'));
@@ -1403,6 +1658,38 @@ function parseChainBytesParam({
   return hexToBytes(trimmed);
 }
 
+function isAssetBytesProposal(action: number): boolean {
+  return action === ProposalAction.SetAssetLimits || action === ProposalAction.RemoveAssetLimits;
+}
+
+/** Parses a token identifier into on-chain asset bytes for the chain kind. */
+function parseAssetBytesParam({
+  value,
+  chainKey,
+  data,
+}: {
+  value: string;
+  chainKey: string;
+  data: RecoveredWallet;
+}): Uint8Array {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error('token / asset identifier is required');
+  const chain = data.state.chains.get(chainKey);
+  if (!chain) throw new Error('select a chain');
+  if (chain.kind === ChainKind.Evm) return evmAddressBytes(trimmed); // ERC-20 contract
+  if (chain.kind === ChainKind.Solana) return solanaAddressBytes(trimmed); // SPL mint
+  if (chain.kind === ChainKind.SuiVault) return suiCoinTypeBytes(trimmed); // coin type
+  return hexToBytes(trimmed);
+}
+
+function assetParamLabel(chainKey: string, data: RecoveredWallet): string {
+  const chain = data.state.chains.get(chainKey);
+  if (chain?.kind === ChainKind.Evm) return 'ERC-20 contract address (0x...)';
+  if (chain?.kind === ChainKind.Solana) return 'SPL token mint (base58)';
+  if (chain?.kind === ChainKind.SuiVault) return 'Sui coin type (0x...::module::TYPE)';
+  return 'asset bytes (hex)';
+}
+
 function bytesParamLabel(action: number, chainKey: string): string {
   if (action === ProposalAction.SetAddressBook) return 'address book identity (chain-native)';
   const descriptor = chainDescriptor(chainKey);
@@ -1442,6 +1729,7 @@ function GovernanceTab({
   const [u5, setU5] = useState('');
   const [boolParam, setBoolParam] = useState(true);
   const [bytesParam, setBytesParam] = useState('');
+  const [assetDecimals, setAssetDecimals] = useState('');
   const [proposalErr, setProposalErr] = useState<string | null>(null);
 
   const selectedChain = chainKey ? data.state.chains.get(chainKey) : null;
@@ -1468,13 +1756,27 @@ function GovernanceTab({
           hoursToMs(u4 || '0'),
           toBase(u5 || '0', selectedDecimals),
         );
+      } else if (action === ProposalAction.SetAssetLimits) {
+        if (!selectedChain) throw new Error('select a chain');
+        const dec = Number.parseInt(assetDecimals, 10);
+        if (!Number.isInteger(dec) || dec < 0 || dec > 36) {
+          throw new Error('token decimals must be an integer between 0 and 36');
+        }
+        uParams.push(
+          toBase(u1 || '0', dec),
+          toBase(u2 || '0', dec),
+          toBase(u3 || '0', dec),
+          hoursToMs(u4 || '0'),
+        );
       }
       const needsAddr = action === ProposalAction.AddSigner || action === ProposalAction.RemoveSigner;
       const needsBytes = isDestinationBytesProposal(action);
       const addrForProposal = needsAddr ? addrParam : null;
-      const bytesForProposal = needsBytes
-        ? parseChainBytesParam({ value: bytesParam, chainKey, data, core })
-        : new Uint8Array();
+      const bytesForProposal = isAssetBytesProposal(action)
+        ? parseAssetBytesParam({ value: bytesParam, chainKey, data })
+        : needsBytes
+          ? parseChainBytesParam({ value: bytesParam, chainKey, data, core })
+          : new Uint8Array();
       const policyBlocker = proposalPolicyBlocker(data, {
         action,
         chainKey,
@@ -1594,6 +1896,46 @@ function GovernanceTab({
                 </div>
               </>
             )}
+            {isAssetBytesProposal(action) && (
+              <>
+                <label>
+                  {assetParamLabel(chainKey, data)}
+                  <input value={bytesParam} onChange={(e) => setBytesParam(e.target.value.trim())} />
+                </label>
+                {action === ProposalAction.SetAssetLimits && (
+                  <>
+                    <p className="muted small">
+                      Amounts below are in TOKEN units (converted with the decimals you enter).
+                      Tokens without limits are unlimited but always need the full threshold + timelock.
+                    </p>
+                    <div className="row wrap">
+                      <label>
+                        token decimals
+                        <input value={assetDecimals} onChange={(e) => setAssetDecimals(e.target.value.trim())} />
+                      </label>
+                      <label>
+                        fast path (tokens)
+                        <input value={u1} onChange={(e) => setU1(e.target.value)} />
+                      </label>
+                      <label>
+                        per-tx limit (tokens)
+                        <input value={u2} onChange={(e) => setU2(e.target.value)} />
+                      </label>
+                    </div>
+                    <div className="row wrap">
+                      <label>
+                        window limit (tokens)
+                        <input value={u3} onChange={(e) => setU3(e.target.value)} />
+                      </label>
+                      <label>
+                        window length (hours)
+                        <input value={u4} onChange={(e) => setU4(e.target.value)} />
+                      </label>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
             {isDestinationBytesProposal(action) && (
               <label>
                 {bytesParamLabel(action, chainKey)}
@@ -1696,8 +2038,15 @@ function ProposalCard({
       {proposal.status === RequestStatus.Pending && (
         <div className="row wrap">
           {!isSigner && <span className="muted small">Connect as a wallet signer to vote.</span>}
-          {isSigner && voted && <span className="muted small">You already voted on this proposal.</span>}
-          {isSigner && !voted && (
+          {isSigner && voted && !expiryBlocker && (
+            <span className="muted small">You already voted on this proposal.</span>
+          )}
+          {isSigner && expiryBlocker && (
+            <span className="muted small">
+              This proposal is expired; voting on it will only mark it expired on-chain.
+            </span>
+          )}
+          {isSigner && !voted && !expiryBlocker && (
             <>
               <button
                 className="primary"
@@ -1723,7 +2072,9 @@ function ProposalCard({
               </button>
             </>
           )}
-          {!reached && <span className="muted small">Needs {needed} more approval{needed === 1 ? '' : 's'}.</span>}
+          {!reached && !expiryBlocker && (
+            <span className="muted small">Needs {needed} more approval{needed === 1 ? '' : 's'}.</span>
+          )}
           {reached && executableAt && !executableNow && (
             <span className="muted small">Executable after {new Date(executableAt).toLocaleString()}.</span>
           )}

@@ -140,14 +140,14 @@ export function CreateWizard({
       });
       const { discoverWallets } = await import('@mythos/wallet-core');
       const before = new Set(
-        await discoverWallets(core.sui as never, core.ids.typesPackageId ?? core.ids.packageId, core.ids.registryId, account.address),
+        await discoverWallets(core.sui, core.ids.typesPackageId ?? core.ids.packageId, core.ids.registryId, account.address),
       );
       await exec(createTx, 'create_wallet');
       // The new wallet registers itself in the on-chain registry; find it there.
       let walletId: string | null = null;
       for (let i = 0; i < 20 && !walletId; i++) {
         const after = await discoverWallets(
-          core.sui as never, core.ids.typesPackageId ?? core.ids.packageId, core.ids.registryId, account.address,
+          core.sui, core.ids.typesPackageId ?? core.ids.packageId, core.ids.registryId, account.address,
         );
         walletId = after.find((id) => !before.has(id)) ?? null;
         if (!walletId) await new Promise((r) => setTimeout(r, 1500));
@@ -181,7 +181,7 @@ export function CreateWizard({
 
       // c. wait for activation + derive addresses
       log('Waiting for the secp256k1 dWallet to activate (~30-60s)...');
-      const state = await getWalletState(core.sui as never, walletId);
+      const state = await getWalletState(core.sui, walletId);
       const secpDwalletId = state.dwallets.get(IkaCurve.Secp256k1)!;
       const dwallet = await core.ika.getActiveDWallet(secpDwalletId);
       const evmAddr = deriveEvmAddress(dwallet.publicKey);
@@ -191,7 +191,7 @@ export function CreateWizard({
 
       let solPubkey: Uint8Array | null = null;
       if (solanaEnabled) {
-        const s2 = await getWalletState(core.sui as never, walletId);
+        const s2 = await getWalletState(core.sui, walletId);
         const edId = s2.dwallets.get(IkaCurve.Ed25519);
         if (edId) {
           log('Waiting for ed25519 dWallet...');
