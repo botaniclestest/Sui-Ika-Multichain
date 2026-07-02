@@ -9,7 +9,7 @@ Last updated: 2026-07-01
 - GitHub remote is `git@github.com:botaniclestest/Sui-Ika-Multichain.git`.
 - Feature work is pushed through `144d99d feat(wallet): discover token balances and verify spl sends` on `main`.
 - This branch contains: the Sui JSON-RPC -> gRPC/GraphQL migration, per-token spend limits (Move + UI), the governance stale-vote fix (Move + UI), presign management in the Send flow, manual ERC-20 tracking, and clearer Solana wallet transaction messages.
-- IMPORTANT: the Move contract changes (asset limits + vote expiry) require a TESTNET PACKAGE UPGRADE before the new governance actions work on-chain. Until then the UI's "set token limits" proposals will abort with EBadProposal, and stale proposals only get client-side gating. Use `sui move build --dump-bytecode-as-base64` + `scripts/upgrade-testnet.ts` as before, then update `deployments.json` (script does it).
+- The testnet package HAS been upgraded with this branch's Move changes (package `0x74f1...3f87`, version 5); the new governance actions are live on testnet and the stuck proposal #1 was expired on-chain.
 - Sui CLI active environment is currently `testnet`.
 - Local preview should be opened from Windows/Chrome at `http://localhost:4173/`.
 - Local dev server for development uses the simple Windows/WSL-friendly bind:
@@ -185,12 +185,14 @@ Last updated: 2026-07-01
 - Original testnet package id: `0x7ff6377aca6185c4abe903fd88d90f0a540001b55698c6d513d8e093ea774fc2`.
 - Testnet registry id: `0xd04d558c2ea37f4fda11e184df83d035634f8c9c42d47860c154f166eab24eff`.
 - Testnet UpgradeCap id: `0xfe24143f475bf1772d1b1ce54de9650bfecbd2653c6d6bac89c3b50d3489e0d6`.
-- Previous latest testnet package id: `0x2b36d2b823448cf4366832db0e6a6b5f18fe5567406cfc1f17ace951e1762b08`.
-- Current latest testnet package id: `0x2e3b49e1be063eab890d57e5b0f783aefc9be6153ca2007b8595417a8ea70557`.
-- Current latest testnet upgrade digest: `35hFfkQo1bUGYhyN1QhkNXfjqcuecQvT64USriNtGEcZ`.
-- Testnet package version in `Published.toml`: `4`.
-- `deployments.json` now uses `latestPackageId` for testnet app calls.
-- Testnet gas after upgrade was about `8.80` SUI across two gas coins.
+- Previous latest testnet package id: `0x2e3b49e1be063eab890d57e5b0f783aefc9be6153ca2007b8595417a8ea70557`.
+- Current latest testnet package id: `0x74f189044f7adb93c269db46a7f1dd4b76fe3e9caa8811132b1371c009ff3f87` (asset limits + governance expiry fix, upgraded 2026-07-01).
+- Current latest testnet upgrade digest: `G5v8PDUbH7qR3ArQLNbyuE84ak6zSAdEoDa8qDezWRsG`.
+- Testnet package version in `Published.toml`: `5`.
+- `deployments.json` uses `latestPackageId` for testnet app calls.
+- Upgrade was simulated first (`simulateTransaction` over gRPC, success) and verified after: `asset_policy_exists`/`asset_per_tx_limit`/`asset_spent_in_window` present in the new package.
+- Live fix verification: stuck proposal #1 (the invalid SET_THRESHOLDS proposal that stayed votable) was lazily expired on-chain by a vote tx (`9uxzdYTxhRUkb1AuFLX15HaAG2mu75NKdowhDwr363RZ`); its status is now EXPIRED(4).
+- Testnet gas after upgrade: about `7.5` SUI.
 
 ## Mainnet Deployment
 
@@ -262,10 +264,9 @@ Known non-blocking warnings:
 
 ## Remaining Work
 
-- Upgrade the testnet package with this branch's Move changes (asset limits + vote expiry) and update `deployments.json`, then browser-QA:
+- Browser QA on testnet (package already upgraded):
   - "set token limits" / "remove token limits" proposals end-to-end (create, vote, execute) for an SPL mint and a vault coin.
   - Confirm an over-chain-limit token send is now allowed pre-override and blocked post-override.
-  - Confirm the stuck testnet proposal #1 (SET_THRESHOLDS) shows as expired and voting on it marks it EXPIRED on-chain after the upgrade.
   - Send tab presign panel: counts update after "+ add presign"; empty-pool warning shows.
   - Track an ERC-20 on Sepolia and confirm its balance row + Send dropdown entry.
   - Solana send: confirm Phantom shows the new memo text on the nonce-rent transaction.
