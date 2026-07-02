@@ -8,6 +8,8 @@ import {
   buildSolTransfer,
   deriveSolanaAddress,
   isSolanaBlockhashExpiredError,
+  memoInstruction,
+  MEMO_PROGRAM_ID,
   SolanaBlockhashExpiredError,
   solanaAddressBytes,
 } from '../src/chains/solana.js';
@@ -256,5 +258,15 @@ describe('solana durable nonce', () => {
       amount: 1_500_001n,
     });
     expect(wrongAmount.ok).toBe(false);
+  });
+
+  it('pins the SPL Memo v2 program id and builds a no-signer memo', () => {
+    // One wrong character here made Phantom's preflight simulation fail
+    // with ProgramAccountNotFound ("Unexpected error"); the id is verified
+    // live against devnet AND mainnet. Do not edit without re-verifying.
+    expect(MEMO_PROGRAM_ID.toBase58()).toBe('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+    const ix = memoInstruction('hello');
+    expect(ix.keys.length).toBe(0);
+    expect(new TextDecoder().decode(Uint8Array.from(ix.data))).toBe('hello');
   });
 });
